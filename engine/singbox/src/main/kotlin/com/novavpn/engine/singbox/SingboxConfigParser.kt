@@ -179,7 +179,7 @@ object SingboxConfigParser {
     private fun JsonObjectBuilder.vlessFields(config: ServerConfig) {
         val raw = parseRawConfig(config.rawConfig)
         val uuid = raw?.get("id")?.jsonPrimitive?.content ?: ""
-        val flow = raw?.get("flow")?.jsonPrimitive?.contentOrNull
+        val flow = raw?.get("flow")?.jsonPrimitive?.content
         val encryption = raw?.get("encryption")?.jsonPrimitive?.content ?: "none"
 
         put("uuid", uuid)
@@ -198,9 +198,9 @@ object SingboxConfigParser {
         val raw = parseRawConfig(config.rawConfig)
         val password = raw?.get("password")?.jsonPrimitive?.content ?: ""
         val method = raw?.get("method")?.jsonPrimitive?.content ?: "aes-256-gcm"
-        val plugin = raw?.get("plugin")?.jsonPrimitive?.contentOrNull
-        val pluginOpts = raw?.get("pluginOpts")?.jsonPrimitive?.contentOrNull
-            ?: raw?.get("plugin_opts")?.jsonPrimitive?.contentOrNull
+        val plugin = raw?.get("plugin")?.jsonPrimitive?.content
+        val pluginOpts = raw?.get("pluginOpts")?.jsonPrimitive?.content
+            ?: raw?.get("plugin_opts")?.jsonPrimitive?.content
 
         put("method", method)
         put("password", password)
@@ -210,8 +210,8 @@ object SingboxConfigParser {
 
     private fun JsonObjectBuilder.socksFields(config: ServerConfig) {
         val raw = parseRawConfig(config.rawConfig)
-        val username = raw?.get("username")?.jsonPrimitive?.contentOrNull
-        val password = raw?.get("password")?.jsonPrimitive?.contentOrNull
+        val username = raw?.get("username")?.jsonPrimitive?.content
+        val password = raw?.get("password")?.jsonPrimitive?.content
 
         if (username != null) {
             put("username", username)
@@ -221,8 +221,8 @@ object SingboxConfigParser {
 
     private fun JsonObjectBuilder.httpFields(config: ServerConfig) {
         val raw = parseRawConfig(config.rawConfig)
-        val username = raw?.get("username")?.jsonPrimitive?.contentOrNull
-        val password = raw?.get("password")?.jsonPrimitive?.contentOrNull
+        val username = raw?.get("username")?.jsonPrimitive?.content
+        val password = raw?.get("password")?.jsonPrimitive?.content
 
         if (username != null) {
             put("username", username)
@@ -241,8 +241,8 @@ object SingboxConfigParser {
         if (config.security == Security.None || config.security == Security.Unknown) return
 
         val raw = parseRawConfig(config.rawConfig)
-        val serverName = raw?.get("serverName")?.jsonPrimitive?.contentOrNull
-            ?: raw?.get("sni")?.jsonPrimitive?.contentOrNull
+        val serverName = raw?.get("serverName")?.jsonPrimitive?.content
+            ?: raw?.get("sni")?.jsonPrimitive?.content
             ?: config.address
 
         when (config.security) {
@@ -253,15 +253,15 @@ object SingboxConfigParser {
                     put("insecure", false)
                     put("utls", buildJsonObject {
                         put("enabled", true)
-                        val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.contentOrNull ?: "chrome"
+                        val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
                         put("fingerprint", fingerprint)
                     })
                 })
             }
             Security.Reality -> {
                 val publicKey = raw?.get("publicKey")?.jsonPrimitive?.content ?: ""
-                val shortId = raw?.get("shortId")?.jsonPrimitive?.contentOrNull ?: ""
-                val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.contentOrNull ?: "chrome"
+                val shortId = raw?.get("shortId")?.jsonPrimitive?.content ?: ""
+                val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
 
                 put("tls", buildJsonObject {
                     put("enabled", true)
@@ -299,10 +299,10 @@ object SingboxConfigParser {
             when (config.transport) {
                 Transport.WebSocket -> {
                     put("type", "ws")
-                    val path = raw?.get("path")?.jsonPrimitive?.contentOrNull ?: "/"
+                    val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
                     put("path", path)
-                    val host = raw?.get("host")?.jsonPrimitive?.contentOrNull
-                        ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.contentOrNull
+                    val host = raw?.get("host")?.jsonPrimitive?.content
+                        ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.content
                     if (host != null) {
                         put("headers", buildJsonObject {
                             put("Host", host)
@@ -311,21 +311,21 @@ object SingboxConfigParser {
                 }
                 Transport.gRPC -> {
                     put("type", "grpc")
-                    val serviceName = raw?.get("serviceName")?.jsonPrimitive?.contentOrNull ?: ""
+                    val serviceName = raw?.get("serviceName")?.jsonPrimitive?.content ?: ""
                     put("service_name", serviceName)
                 }
                 Transport.QUIC -> {
                     put("type", "quic")
-                    val quicSecurity = raw?.get("quicSecurity")?.jsonPrimitive?.contentOrNull ?: "none"
-                    val key = raw?.get("key")?.jsonPrimitive?.contentOrNull ?: ""
+                    val quicSecurity = raw?.get("quicSecurity")?.jsonPrimitive?.content ?: "none"
+                    val key = raw?.get("key")?.jsonPrimitive?.content ?: ""
                     put("security", quicSecurity)
                     put("key", key)
                 }
                 Transport.HTTP -> {
                     put("type", "http")
-                    val path = raw?.get("path")?.jsonPrimitive?.contentOrNull ?: "/"
+                    val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
                     put("path", path)
-                    val host = raw?.get("host")?.jsonPrimitive?.contentOrNull
+                    val host = raw?.get("host")?.jsonPrimitive?.content
                     if (host != null) {
                         put("host", buildJsonArray {
                             host.split(",").forEach { add(it.trim()) }
