@@ -79,9 +79,9 @@ sealed class EngineResult {
  */
 data class EngineError(
     val code: ErrorCode,
-    val message: String,
-    val cause: Throwable? = null
-) {
+    override val message: String,
+    override val cause: Throwable? = null
+) : Throwable(message, cause) {
     enum class ErrorCode {
         CONFIG_PARSE_FAILURE,
         ENGINE_BINARY_MISSING,
