@@ -29,17 +29,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.5
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.5
 
       - name: Grant execute permission
         run: chmod +x gradlew
-
-      - name: Clean project
-        run: ./gradlew clean --no-daemon
 
       - name: Run lint
         run: ./gradlew lint --no-daemon
