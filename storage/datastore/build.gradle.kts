@@ -26,6 +26,7 @@ android {
 
 
 dependencies {
+    implementation(project(":core:domain"))
     implementation(libs.datastore.preferences)
     implementation(libs.bundles.coroutines)
     implementation(libs.kotlinx.serialization.json)
