@@ -134,9 +134,7 @@ fun ServerListItem(
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onTap),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected)
@@ -146,12 +144,16 @@ fun ServerListItem(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 0.dp)
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clickable(onClick = onTap)
+                .padding(16.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
             // Protocol icon
             Surface(
                 shape = RoundedCornerShape(8.dp),
@@ -206,6 +208,7 @@ fun ServerListItem(
                 HealthIndicator(isHealthy = isHealthy)
             }
         }
+        }
     }
 }
 
@@ -221,14 +224,18 @@ fun SubscriptionListItem(
     modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onTap),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Row(
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onTap)
+                .padding(16.dp)
+        ) {
+            Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
@@ -250,6 +257,7 @@ fun SubscriptionListItem(
                 checked = subscription.isEnabled,
                 onCheckedChange = onToggle
             )
+        }
         }
     }
 }
