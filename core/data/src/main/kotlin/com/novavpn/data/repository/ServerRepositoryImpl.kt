@@ -1,0 +1,61 @@
+package com.novavpn.data.repository
+
+import com.novavpn.data.mapper.toDomain
+import com.novavpn.data.mapper.toEntity
+import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.repository.ServerRepository
+import com.novavpn.storage.room.dao.ServerConfigDao
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Room-backed implementation of [ServerRepository].
+ */
+@Singleton
+class ServerRepositoryImpl @Inject constructor(
+    private val serverConfigDao: ServerConfigDao
+) : ServerRepository {
+
+    override fun observeAll(): Flow<List<ServerConfig>> {
+        return serverConfigDao.observeAll().map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
+    override fun observeBySubscription(subscriptionId: String): Flow<List<ServerConfig>> {
+        return serverConfigDao.observeBySubscription(subscriptionId).map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
+    override suspend fun getById(id: String): ServerConfig? {
+        return serverConfigDao.getById(id)?.toDomain()
+    }
+
+    override suspend fun replaceForSubscription(
+        subscriptionId: String,
+        servers: List<ServerConfig>
+    ) {
+        serverConfigDao.deleteBySubscription(subscriptionId)
+        val entities = servers.map { it.toEntity() }
+        serverConfigDao.insertAll(entities)
+    }
+
+    override suspend fun deleteBySubscription(subscriptionId: String) {
+        serverConfigDao.deleteBySubscription(subscriptionId)
+    }
+
+    override suspend fun setFavourite(serverId: String, isFavourite: Boolean) {
+        serverConfigDao.setFavourite(serverId, isFavourite)
+    }
+
+    override suspend fun getLastConnected(): ServerConfig? {
+        return serverConfigDao.getLastConnected()?.toDomain()
+    }
+
+    override suspend fun setLastConnected(serverId: String) {
+        serverConfigDao.setLastConnected(serverId, System.currentTimeMillis())
+    }
+}
