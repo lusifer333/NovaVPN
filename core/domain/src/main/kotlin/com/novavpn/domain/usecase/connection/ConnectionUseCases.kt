@@ -9,9 +9,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Central use case managing VPN connection lifecycle.
- */
 @Singleton
 class ConnectUseCase @Inject constructor(
     private val getBestServer: GetBestServerUseCase
@@ -26,7 +23,6 @@ class ConnectUseCase @Inject constructor(
     suspend fun connect(server: ServerConfig) {
         _connectionState.value = ConnectionState.Connecting
         currentServer = server
-        // Actual connection handled by engine layer
     }
 
     suspend fun disconnect() {

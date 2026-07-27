@@ -2,7 +2,9 @@ package com.novavpn.domain.usecase.server
 
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.repository.ServerRepository
+import com.novavpn.domain.repository.StatisticsRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import javax.inject.Inject
 
 class ObserveServersUseCase @Inject constructor(
@@ -35,7 +37,7 @@ class SelectServerUseCase @Inject constructor(
 
 class GetBestServerUseCase @Inject constructor(
     private val serverRepo: ServerRepository,
-    private val statsRepo: com.novavpn.domain.repository.StatisticsRepository
+    private val statsRepo: StatisticsRepository
 ) {
     suspend operator fun invoke(): ServerConfig? {
         val scores = statsRepo.getAllScores()
@@ -49,6 +51,6 @@ class GetBestServerUseCase @Inject constructor(
 
         // Fallback: return any server
         val servers = serverRepo.observeAll()
-        return kotlinx.coroutines.flow.firstOrNull(servers)?.firstOrNull()
+        return servers.firstOrNull()?.firstOrNull()
     }
 }
