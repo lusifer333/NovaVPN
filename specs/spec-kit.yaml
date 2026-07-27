@@ -1,0 +1,39 @@
+# Spec Kit — NovaVPN
+# Version: 1.0.0
+# Purpose: Project architecture, planning, and development governance.
+
+spec-kit:
+  version: "1.0.0"
+  project: "NovaVPN"
+  repository: "https://github.com/lusifer333/NovaVPN"
+  
+  structure:
+    constitution: "specs/constitution.md"
+    product: "specs/product-spec.md"
+    architecture: "specs/architecture.md"
+    roadmap: "specs/roadmap.md"
+    ci: "specs/ci-cd.md"
+    tasks: "specs/tasks/"
+  
+  validation:
+    required-files:
+      - constitution.md
+      - product-spec.md
+      - architecture.md
+      - roadmap.md
+      - ci-cd.md
+
+  conventions:
+    file-format: "markdown"
+    frontmatter: true
+    task-priority:
+      - "P0: Critical"
+      - "P1: High"
+      - "P2: Medium"
+      - "P3: Low"
+    task-status:
+      - "proposed"
+      - "accepted"
+      - "in-progress"
+      - "completed"
+      - "cancelled"
