@@ -59,9 +59,9 @@ object SingboxConfigParser {
     // ------------------------------------------------------------------
 
     private fun buildLogSection(): JsonObject = buildJsonObject {
-        put("level", "info")
-        put("output", "")
-        put("timestamp", true)
+        put("level", JsonPrimitive("info"))
+        put("output", JsonPrimitive(""))
+        put("timestamp", JsonPrimitive(true))
     }
 
     // ------------------------------------------------------------------
@@ -75,18 +75,18 @@ object SingboxConfigParser {
      */
     private fun buildInbounds(): JsonArray = buildJsonArray {
         add(buildJsonObject {
-            put("type", "socks")
-            put("tag", "socks-in")
-            put("listen", "127.0.0.1")
+            put("type", JsonPrimitive("socks"))
+            put("tag", JsonPrimitive("socks-in"))
+            put("listen", JsonPrimitive("127.0.0.1"))
             put("listen_port", 10808)
-            put("sniff", true)
+            put("sniff", JsonPrimitive(true))
         })
         add(buildJsonObject {
-            put("type", "http")
-            put("tag", "http-in")
-            put("listen", "127.0.0.1")
+            put("type", JsonPrimitive("http"))
+            put("tag", JsonPrimitive("http-in"))
+            put("listen", JsonPrimitive("127.0.0.1"))
             put("listen_port", 10809)
-            put("sniff", true)
+            put("sniff", JsonPrimitive(true))
         })
     }
 
@@ -103,12 +103,12 @@ object SingboxConfigParser {
     private fun buildOutbounds(config: ServerConfig): JsonArray = buildJsonArray {
         add(buildProxyOutbound(config))
         add(buildJsonObject {
-            put("type", "direct")
-            put("tag", "direct")
+            put("type", JsonPrimitive("direct"))
+            put("tag", JsonPrimitive("direct"))
         })
         add(buildJsonObject {
-            put("type", "block")
-            put("tag", "block")
+            put("type", JsonPrimitive("block"))
+            put("tag", JsonPrimitive("block"))
         })
     }
 
@@ -117,45 +117,45 @@ object SingboxConfigParser {
      * Dispatches to protocol-specific extension functions on [JsonObjectBuilder].
      */
     private fun buildProxyOutbound(config: ServerConfig): JsonObject = buildJsonObject {
-        put("tag", "proxy")
+        put("tag", JsonPrimitive("proxy"))
         put("server", config.address)
         put("server_port", config.port)
 
         when (config.protocol) {
             Protocol.VMess -> {
-                put("type", "vmess")
+                put("type", JsonPrimitive("vmess"))
                 vmessFields(config)
                 tlsFields(config)
                 transportFields(config)
             }
             Protocol.VLESS -> {
-                put("type", "vless")
+                put("type", JsonPrimitive("vless"))
                 vlessFields(config)
                 tlsFields(config)
                 transportFields(config)
             }
             Protocol.Trojan -> {
-                put("type", "trojan")
+                put("type", JsonPrimitive("trojan"))
                 trojanFields(config)
                 tlsFields(config)
                 transportFields(config)
             }
             Protocol.Shadowsocks -> {
-                put("type", "shadowsocks")
+                put("type", JsonPrimitive("shadowsocks"))
                 shadowsocksFields(config)
             }
             Protocol.SOCKS5 -> {
-                put("type", "socks")
+                put("type", JsonPrimitive("socks"))
                 socksFields(config)
                 tlsFields(config)
             }
             Protocol.HTTP -> {
-                put("type", "http")
+                put("type", JsonPrimitive("http"))
                 httpFields(config)
                 tlsFields(config)
             }
             Protocol.Unknown -> {
-                put("type", "direct")
+                put("type", JsonPrimitive("direct"))
             }
         }
     }
@@ -171,9 +171,9 @@ object SingboxConfigParser {
         val security = raw?.get("security")?.jsonPrimitive?.content ?: "auto"
         val alterId = raw?.get("aid")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
 
-        put("uuid", uuid)
-        put("security", security)
-        put("alter_id", alterId)
+        put("uuid", JsonPrimitive(uuid))
+        put("security", JsonPrimitive(security))
+        put("alter_id", JsonPrimitive(alterId))
     }
 
     private fun JsonObjectBuilder.vlessFields(config: ServerConfig) {
@@ -182,8 +182,8 @@ object SingboxConfigParser {
         val flow = raw?.get("flow")?.jsonPrimitive?.content
         val encryption = raw?.get("encryption")?.jsonPrimitive?.content ?: "none"
 
-        put("uuid", uuid)
-        put("encryption", encryption)
+        put("uuid", JsonPrimitive(uuid))
+        put("encryption", JsonPrimitive(encryption))
         if (flow != null) put("flow", flow)
     }
 
@@ -191,7 +191,7 @@ object SingboxConfigParser {
         val raw = parseRawConfig(config.rawConfig)
         val password = raw?.get("password")?.jsonPrimitive?.content ?: ""
 
-        put("password", password)
+        put("password", JsonPrimitive(password))
     }
 
     private fun JsonObjectBuilder.shadowsocksFields(config: ServerConfig) {
@@ -202,8 +202,8 @@ object SingboxConfigParser {
         val pluginOpts = raw?.get("pluginOpts")?.jsonPrimitive?.content
             ?: raw?.get("plugin_opts")?.jsonPrimitive?.content
 
-        put("method", method)
-        put("password", password)
+        put("method", JsonPrimitive(method))
+        put("password", JsonPrimitive(password))
         if (plugin != null) put("plugin", plugin)
         if (pluginOpts != null) put("plugin_opts", pluginOpts)
     }
@@ -214,7 +214,7 @@ object SingboxConfigParser {
         val password = raw?.get("password")?.jsonPrimitive?.content
 
         if (username != null) {
-            put("username", username)
+            put("username", JsonPrimitive(username))
             if (password != null) put("password", password)
         }
     }
@@ -225,7 +225,7 @@ object SingboxConfigParser {
         val password = raw?.get("password")?.jsonPrimitive?.content
 
         if (username != null) {
-            put("username", username)
+            put("username", JsonPrimitive(username))
             if (password != null) put("password", password)
         }
     }
@@ -248,13 +248,13 @@ object SingboxConfigParser {
         when (config.security) {
             Security.TLS -> {
                 put("tls", buildJsonObject {
-                    put("enabled", true)
-                    put("server_name", serverName)
-                    put("insecure", false)
+                    put("enabled", JsonPrimitive(true))
+                    put("server_name", JsonPrimitive(serverName))
+                    put("insecure", JsonPrimitive(false))
                     put("utls", buildJsonObject {
-                        put("enabled", true)
+                        put("enabled", JsonPrimitive(true))
                         val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
-                        put("fingerprint", fingerprint)
+                        put("fingerprint", JsonPrimitive(fingerprint))
                     })
                 })
             }
@@ -264,17 +264,17 @@ object SingboxConfigParser {
                 val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
 
                 put("tls", buildJsonObject {
-                    put("enabled", true)
-                    put("server_name", serverName)
-                    put("insecure", false)
+                    put("enabled", JsonPrimitive(true))
+                    put("server_name", JsonPrimitive(serverName))
+                    put("insecure", JsonPrimitive(false))
                     put("utls", buildJsonObject {
-                        put("enabled", true)
-                        put("fingerprint", fingerprint)
+                        put("enabled", JsonPrimitive(true))
+                        put("fingerprint", JsonPrimitive(fingerprint))
                     })
                     put("reality", buildJsonObject {
-                        put("enabled", true)
-                        put("public_key", publicKey)
-                        put("short_id", shortId)
+                        put("enabled", JsonPrimitive(true))
+                        put("public_key", JsonPrimitive(publicKey))
+                        put("short_id", JsonPrimitive(shortId))
                     })
                 })
             }
@@ -298,33 +298,33 @@ object SingboxConfigParser {
         put("transport", buildJsonObject {
             when (config.transport) {
                 Transport.WebSocket -> {
-                    put("type", "ws")
+                    put("type", JsonPrimitive("ws"))
                     val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
-                    put("path", path)
+                    put("path", JsonPrimitive(path))
                     val host = raw?.get("host")?.jsonPrimitive?.content
                         ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.content
                     if (host != null) {
                         put("headers", buildJsonObject {
-                            put("Host", host)
+                            put("Host", JsonPrimitive(host))
                         })
                     }
                 }
                 Transport.gRPC -> {
-                    put("type", "grpc")
+                    put("type", JsonPrimitive("grpc"))
                     val serviceName = raw?.get("serviceName")?.jsonPrimitive?.content ?: ""
-                    put("service_name", serviceName)
+                    put("service_name", JsonPrimitive(serviceName))
                 }
                 Transport.QUIC -> {
-                    put("type", "quic")
+                    put("type", JsonPrimitive("quic"))
                     val quicSecurity = raw?.get("quicSecurity")?.jsonPrimitive?.content ?: "none"
                     val key = raw?.get("key")?.jsonPrimitive?.content ?: ""
-                    put("security", quicSecurity)
-                    put("key", key)
+                    put("security", JsonPrimitive(quicSecurity))
+                    put("key", JsonPrimitive(key))
                 }
                 Transport.HTTP -> {
-                    put("type", "http")
+                    put("type", JsonPrimitive("http"))
                     val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
-                    put("path", path)
+                    put("path", JsonPrimitive(path))
                     val host = raw?.get("host")?.jsonPrimitive?.content
                     if (host != null) {
                         put("host", buildJsonArray {
@@ -353,7 +353,7 @@ object SingboxConfigParser {
                     add("socks-in")
                     add("http-in")
                 })
-                put("outbound", "proxy")
+                put("outbound", JsonPrimitive("proxy"))
             })
         })
     }
