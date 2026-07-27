@@ -86,7 +86,6 @@ enum class EngineFormat {
 /**
  * VPN connection state.
  */
-@Serializable
 enum class ConnectionState {
     Disconnected,
     Connecting,
@@ -98,7 +97,6 @@ enum class ConnectionState {
 /**
  * Engine runtime state.
  */
-@Serializable
 enum class EngineRuntimeState {
     Idle,
     Starting,
