@@ -26,7 +26,7 @@ object SettingsSerializer : Serializer<AppSettings> {
         return try {
             json.decodeFromString(
                 AppSettings.serializer(),
-                input.readAll().decodeToString()
+                input.readBytes().decodeToString()
             )
         } catch (e: SerializationException) {
             throw CorruptionException("Cannot read AppSettings", e)
