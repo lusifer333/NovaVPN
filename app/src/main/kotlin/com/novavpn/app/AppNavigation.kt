@@ -1,4 +1,4 @@
-package com.novavpn.ui.navigation
+package com.novavpn.app
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -7,26 +7,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavHostController
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
 import com.novavpn.feature.home.HomeScreen
 import com.novavpn.feature.subscriptions.SubscriptionsScreen
 import com.novavpn.feature.servers.ServersScreen
 import com.novavpn.feature.statistics.StatisticsScreen
 import com.novavpn.feature.settings.SettingsScreen
 import com.novavpn.feature.logs.LogsScreen
+import com.novavpn.ui.navigation.Screen
 
-/**
- * Bottom navigation item data.
- */
-data class BottomNavItem(
+private data class BottomNavItem(
     val screen: Screen,
     val icon: ImageVector,
     val label: String
@@ -40,9 +34,6 @@ private val bottomNavItems = listOf(
     BottomNavItem(Screen.Settings, Icons.Default.Settings, "Settings")
 )
 
-/**
- * Root navigation host with bottom navigation.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppNavigation() {
@@ -50,7 +41,6 @@ fun AppNavigation() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    // Determine whether to show bottom bar
     val showBottomBar = bottomNavItems.any { item ->
         currentDestination?.hierarchy?.any { it.route == item.screen.route } == true
     }

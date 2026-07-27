@@ -2,7 +2,6 @@ package com.novavpn.app
 
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,10 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import com.novavpn.app.service.NovaVpnService
-import com.novavpn.ui.navigation.AppNavigation
 import com.novavpn.ui.theme.NovaVPNTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -43,9 +39,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Request VPN permission from the user.
-     */
     fun requestVpnPermission() {
         val intent = VpnService.prepare(this)
         if (intent != null) {
