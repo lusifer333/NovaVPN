@@ -123,7 +123,7 @@ abstract class DataModule {
         @Provides
         @Singleton
         fun provideSettingsSerializer(): SettingsSerializer {
-            return SettingsSerializer()
+            return SettingsSerializer
         }
 
         @Provides
