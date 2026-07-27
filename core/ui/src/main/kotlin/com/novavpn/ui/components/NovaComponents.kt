@@ -3,7 +3,6 @@ package com.novavpn.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -75,21 +74,16 @@ fun NovaStatusIndicator(
         ConnectionState.Error -> "Error"
     }
 
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color.copy(alpha = 0.1f),
+        modifier = modifier
     ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(Modifier.width(8.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = color
+            color = color,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
         )
     }
 }
@@ -113,21 +107,16 @@ fun HealthIndicator(
         null -> "Untested"
     }
 
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = color.copy(alpha = 0.15f),
+        modifier = modifier
     ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(Modifier.width(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = color
+            color = color,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
         )
     }
 }
