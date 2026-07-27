@@ -2,6 +2,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.kapt)
 }
@@ -31,6 +32,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:common"))
     implementation(project(":logging"))
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.bundles.coroutines)
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
