@@ -2,7 +2,9 @@ package com.novavpn.app.di
 
 import android.content.Context
 import com.novavpn.app.service.AndroidBinaryManager
+import com.novavpn.app.service.VpnServiceStarterImpl
 import com.novavpn.domain.model.EngineType
+import com.novavpn.domain.usecase.connection.VpnServiceStarter
 import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.api.EngineManagerImpl
@@ -45,4 +47,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideApplicationContext(@ApplicationContext context: Context): Context = context
+
+    @Provides
+    @Singleton
+    fun provideVpnServiceStarter(
+        impl: VpnServiceStarterImpl
+    ): VpnServiceStarter = impl
 }
