@@ -31,6 +31,9 @@ object AppModule {
     ): EngineManager {
         impl.register(EngineType.Xray, xrayEngine)
         impl.register(EngineType.SingBox, singboxEngine)
+        // Select Xray as the default engine synchronously
+        // (selectEngine is suspend — we call internal method directly)
+        impl.selectEngineSync(EngineType.Xray)
         return impl
     }
 

@@ -38,6 +38,20 @@ class EngineManagerImpl @Inject constructor(
         Timber.tag(TAG).i("Registered engine: ${type.displayName}")
     }
 
+    /**
+     * Select an engine synchronously (does not persist to settings).
+     * Used during DI initialization before coroutines are available.
+     */
+    fun selectEngineSync(type: EngineType) {
+        val engine = engineMap[type]
+        if (engine != null) {
+            _activeEngine.value = engine
+            Timber.tag(TAG).i("Active engine (sync): ${type.displayName}")
+        } else {
+            Timber.tag(TAG).w("Engine type $type is not registered")
+        }
+    }
+
     override suspend fun selectEngine(type: EngineType) {
         val engine = engineMap[type]
         if (engine != null) {
