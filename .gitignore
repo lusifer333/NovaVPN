@@ -31,6 +31,8 @@ Thumbs.db
 *.aab
 *.ap_
 *.dex
+build/
+app/build/
 *.jks
 *.keystore
 key.properties

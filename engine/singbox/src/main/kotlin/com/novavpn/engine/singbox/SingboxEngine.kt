@@ -125,9 +125,14 @@ class SingboxEngine @Inject constructor(
             try {
                 // 1. Ensure engine binary is available
                 val binaryPath = binaryManager.ensureEngine(EngineType.SingBox).getOrThrow()
-                Timber.tag(TAG).i("Binary path: %s", binaryPath)
+                Timber.tag(TAG).i("Sing-box binary: %s (%d KB)", binaryPath,
+                    java.io.File(binaryPath).length() / 1024)
 
-                // 2. Generate sing-box JSON config
+                // 2. Get engine version
+                val version = binaryManager.getEngineVersion(EngineType.SingBox)
+                Timber.tag(TAG).i("Sing-box version: %s", version ?: "unknown")
+
+                // 3. Generate sing-box JSON config
                 val jsonConfig = SingboxConfigParser.toSingboxJson(config)
                 Timber.tag(TAG).d("Generated Sing-box config:\\n%s", jsonConfig)
 

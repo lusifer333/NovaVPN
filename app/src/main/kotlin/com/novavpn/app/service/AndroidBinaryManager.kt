@@ -6,15 +6,17 @@ import com.novavpn.engine.api.BinaryManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import timber.log.Timber
 import java.io.File
+import java.io.FileNotFoundException
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Android implementation of [BinaryManager].
  *
- * Engine binaries are shipped inside the APK under
- * `src/main/assets/engines/<engine>/<arch>/<binary>` and extracted
- * to the app's private files directory on first launch.
+ * Engine binaries must be placed at:
+ *   app/src/main/assets/engines/<engine>/<arch>/<binary>
+ *
+ * Run `scripts/download-engines.sh` to download them before building the APK.
  */
 @Singleton
 class AndroidBinaryManager @Inject constructor(
@@ -25,42 +27,83 @@ class AndroidBinaryManager @Inject constructor(
         get() = File(context.filesDir, ENGINE_ROOT)
 
     override fun getEnginePath(type: EngineType): String? {
-        val binary = binaryFile(type)
-        return if (binary.exists() && binary.canExecute()) binary.absolutePath else null
+        val bin = binaryFile(type)
+        if (bin.exists() && bin.canExecute()) {
+            Timber.tag(TAG).d("Engine binary found: %s (%d bytes)", bin.absolutePath, bin.length())
+            return bin.absolutePath
+        }
+        // Check assets for embedded binary that hasn't been extracted yet
+        val assetPath = assetsPath(type)
+        try {
+            context.assets.open(assetPath).use { Timber.tag(TAG).d("Binary exists in assets: %s", assetPath) }
+        } catch (_: FileNotFoundException) {
+            Timber.tag(TAG).w("Binary NOT in assets at: %s", assetPath)
+        }
+        return null
     }
 
     override fun getEngineVersion(type: EngineType): String? {
-        val file = File(engineDirectory, "${type.name.lowercase()}.version")
-        return if (file.exists()) file.readText().trim() else null
+        // Try version file first
+        val verFile = File(engineDirectory, "${type.name.lowercase()}.version")
+        if (verFile.exists()) return verFile.readText().trim()
+
+        // Try reading from binary via --version
+        val path = getEnginePath(type) ?: return null
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf(path, "--version"))
+            val output = proc.inputStream.bufferedReader().readText().lines().firstOrNull()?.trim()
+            proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            output
+        } catch (e: Exception) {
+            Timber.tag(TAG).d("Could not read engine version: %s", e.message)
+            null
+        }
     }
 
     override suspend fun ensureEngine(type: EngineType): Result<String> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
+            // Check if already extracted
             val existing = getEnginePath(type)
-            if (existing != null) return@runCatching existing
+            if (existing != null) {
+                Timber.tag(TAG).i("Engine already available: %s", existing)
+                return@runCatching existing
+            }
 
             val binFile = binaryFile(type)
             binFile.parentFile?.mkdirs()
 
             val assetPath = assetsPath(type)
-            Timber.tag(TAG).i("Extracting engine binary: $assetPath → ${binFile.absolutePath}")
+            Timber.tag(TAG).i("Extracting engine binary from assets: %s", assetPath)
 
-            try {
-                context.assets.open(assetPath).use { input ->
-                    binFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
+            // Try to extract from APK assets
+            val inputStream = try {
+                context.assets.open(assetPath)
+            } catch (e: FileNotFoundException) {
+                val msg = buildString {
+                    appendLine("Engine binary not found!")
+                    appendLine("  Path expected: app/src/main/assets/$assetPath")
+                    appendLine("  Run: scripts/download-engines.sh")
+                    appendLine("  Or download manually from:")
+                    appendLine("    Xray:    https://github.com/XTLS/Xray-core/releases")
+                    appendLine("    Sing-box: https://github.com/SagerNet/sing-box/releases")
                 }
-            } catch (e: Exception) {
-                // Binary not bundled — create a placeholder log entry
-                Timber.tag(TAG).w("Engine binary not found in assets at '$assetPath'. " +
-                    "Download Xray from https://github.com/XTLS/Xray-core/releases " +
-                    "and place at app/src/main/assets/$assetPath")
-                binFile.writeText("#!/system/bin/sh\necho \"Engine not bundled: $assetPath\"\nexit 1")
+                throw FileNotFoundException(msg)
             }
 
+            inputStream.use { input ->
+                binFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            // Set executable permission
             binFile.setExecutable(true)
-            Timber.tag(TAG).i("Engine binary ready: ${binFile.absolutePath}")
+            if (!binFile.canExecute()) {
+                throw SecurityException("Cannot set executable permission on ${binFile.absolutePath}")
+            }
+
+            val sizeKb = binFile.length() / 1024
+            Timber.tag(TAG).i("Engine binary extracted: %s (%d KB)", binFile.absolutePath, sizeKb)
             binFile.absolutePath
         }
     }

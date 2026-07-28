@@ -127,9 +127,14 @@ class XrayEngine @Inject constructor(
             try {
                 // 1. Ensure engine binary is available
                 val binaryPath = binaryManager.ensureEngine(EngineType.Xray).getOrThrow()
-                Timber.tag(TAG).i("Binary path: %s", binaryPath)
+                Timber.tag(TAG).i("Xray binary: %s (%d KB)", binaryPath,
+                    java.io.File(binaryPath).length() / 1024)
 
-                // 2. Generate Xray JSON config
+                // 2. Get engine version
+                val version = binaryManager.getEngineVersion(EngineType.Xray)
+                Timber.tag(TAG).i("Xray version: %s", version ?: "unknown")
+
+                // 3. Generate Xray JSON config
                 val jsonConfig = XrayConfigParser.toXrayJson(config)
                 Timber.tag(TAG).d("Generated Xray config:\\n%s", jsonConfig)
 
