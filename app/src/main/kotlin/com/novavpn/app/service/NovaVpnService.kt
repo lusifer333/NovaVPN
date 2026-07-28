@@ -42,6 +42,7 @@ class NovaVpnService : VpnService() {
         const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
         const val EXTRA_CONFIG_ID = "extra_server_id"
         private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
+        private const val TAG = "NovaVpnService"
     }
 
     override fun onCreate() {
