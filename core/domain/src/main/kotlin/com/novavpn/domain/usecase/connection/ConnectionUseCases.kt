@@ -3,8 +3,8 @@ package com.novavpn.domain.usecase.connection
 import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.usecase.server.GetBestServerUseCase
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -14,7 +14,7 @@ class ConnectUseCase @Inject constructor(
     private val getBestServer: GetBestServerUseCase
 ) {
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
-    val connectionState: Flow<ConnectionState> = _connectionState.asStateFlow()
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private var currentServer: ServerConfig? = null
 
@@ -51,5 +51,5 @@ class AutoConnectUseCase @Inject constructor(
 class ObserveConnectionStateUseCase @Inject constructor(
     private val connectUseCase: ConnectUseCase
 ) {
-    operator fun invoke(): Flow<ConnectionState> = connectUseCase.connectionState
+    operator fun invoke(): StateFlow<ConnectionState> = connectUseCase.connectionState
 }

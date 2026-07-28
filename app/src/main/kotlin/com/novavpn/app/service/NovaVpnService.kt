@@ -7,14 +7,15 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.novavpn.app.MainActivity
-import com.novavpn.app.R
+import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.NovaConfig
-import com.novavpn.engine.api.Engine
+import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.usecase.connection.ConnectUseCase
+import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -22,158 +23,176 @@ import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import javax.inject.Inject
 
-/**
- * Android VpnService that bridges the VPN tun interface to the selected engine.
- */
 @AndroidEntryPoint
 class NovaVpnService : VpnService() {
 
     @Inject lateinit var engineManager: EngineManager
+    @Inject lateinit var connectUseCase: ConnectUseCase
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var connectionJob: Job? = null
+
+    companion object {
+        const val ACTION_START = "com.novavpn.action.START_VPN"
+        const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
+        const val EXTRA_CONFIG = "extra_server_config"
+        private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NovaConfig.NOTIFICATION_ID, createNotification("Starting…"))
+        connectUseCase.updateState(ConnectionState.Disconnected)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startVpn()
+            ACTION_START -> startVpn(intent.getParcelableExtra(EXTRA_CONFIG))
             ACTION_STOP -> stopVpn()
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        stopVpn()
+        stopVpnInternal()
         serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onRevoke() {
-        stopVpn()
+        connectUseCase.updateState(ConnectionState.Error)
+        stopVpnInternal()
     }
 
-    private fun startVpn() {
-        serviceScope.launch {
-            try {
-                updateNotification("Connecting…")
+    fun startVpn(config: ServerConfig?) {
+        currentConfig = config
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            try { connect(config) } catch (e: Exception) {
+                Timber.e(e, "VPN failed"); connectUseCase.updateState(ConnectionState.Error)
+                updateNotification("Connection failed")
+            }
+        }
+    }
 
-                // Build VPN interface
-                val builder = Builder()
-                builder.setSession(NovaConfig.VPN_SESSION_NAME)
-                builder.setMtu(1500)
+    fun stopVpn() {
+        connectionJob?.cancel()
+        serviceScope.launch { stopVpnInternal() }
+    }
 
-                // Add address
-                builder.addAddress("10.0.0.2", 32)
+    fun reconnect() {
+        val config = currentConfig ?: return
+        connectionJob?.cancel()
+        connectionJob = serviceScope.launch {
+            stopVpnInternal(); connect(config)
+        }
+    }
 
-                // Add DNS
-                builder.addDnsServer("8.8.8.8")
-                builder.addDnsServer("1.1.1.1")
+    private suspend fun connect(config: ServerConfig?) {
+        connectUseCase.updateState(ConnectionState.Connecting)
+        updateNotification("Connecting…")
 
-                // Add route (all traffic)
-                builder.addRoute("0.0.0.0", 0)
+        val cfg = config ?: run {
+            connectUseCase.updateState(ConnectionState.Error)
+            updateNotification("No server"); return
+        }
 
-                // Set blocking mode
-                builder.setBlocking(true)
+        val tun = buildTun() ?: run {
+            connectUseCase.updateState(ConnectionState.Error)
+            updateNotification("TUN failed"); return
+        }
+        tunInterface = tun
 
-                // Establish tun interface
-                tunInterface = builder.establish()
-                if (tunInterface == null) {
-                    Timber.e("Failed to establish VPN interface")
-                    updateNotification("Failed to start VPN")
-                    stopSelf()
-                    return@launch
-                }
+        val engine = engineManager.activeEngine ?: run {
+            connectUseCase.updateState(ConnectionState.Error)
+            updateNotification("No engine"); return
+        }
 
-                Timber.i("VPN interface established")
+        val ctx = object : EngineContext {
+            override val isVpnPermissionGranted = true
+            override val tunFileDescriptor = tun.fd
+            override val dnsServers = listOf("8.8.8.8", "1.1.1.1")
+            override val routes = listOf("0.0.0.0/0")
+        }
 
-                // Start engine with the tun fd
-                val engine = engineManager.activeEngine
-                if (engine != null) {
-                    val engineContext = object : com.novavpn.engine.api.EngineContext {
-                        override val isVpnPermissionGranted: Boolean = true
-                        override val tunFileDescriptor: Int = tunInterface!!.fd
-                        override val dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1")
-                        override val routes: List<String> = listOf("0.0.0.0/0")
-                    }
+        engine.initialize(ctx).onFailure {
+            connectUseCase.updateState(ConnectionState.Error); updateNotification("Init failed"); return
+        }
+        engine.start(cfg).onFailure {
+            connectUseCase.updateState(ConnectionState.Error); updateNotification("Start failed"); return
+        }
 
-                    engine.initialize(engineContext)
+        val running = try {
+            withTimeout(15_000L) {
+                engine.state.first { it == EngineRuntimeState.Running || it == EngineRuntimeState.Crashed }
+            }
+        } catch (_: TimeoutCancellationException) {
+            engine.stop(); connectUseCase.updateState(ConnectionState.Error)
+            updateNotification("Timeout"); return
+        }
+        if (running == EngineRuntimeState.Crashed) {
+            connectUseCase.updateState(ConnectionState.Error); updateNotification("Crashed"); return
+        }
 
-                    // Wait for engine to be running
-                    val state = engine.state.first { it == EngineRuntimeState.Running }
-                    if (state == EngineRuntimeState.Running) {
+        connectUseCase.updateState(ConnectionState.Connected)
+        updateNotification("Connected")
+
+        try {
+            engine.state.collect { state ->
+                if (state == EngineRuntimeState.Crashed && connectUseCase.connectionState.value == ConnectionState.Connected) {
+                    connectUseCase.updateState(ConnectionState.Error)
+                    updateNotification("Reconnecting…")
+                    engine.restart(cfg).onSuccess {
+                        connectUseCase.updateState(ConnectionState.Connected)
                         updateNotification("Connected")
-                        Timber.i("VPN engine started successfully")
                     }
                 }
-
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start VPN")
-                updateNotification("Connection error")
-                stopSelf()
             }
-        }
+        } catch (_: CancellationException) { }
     }
 
-    private fun stopVpn() {
-        serviceScope.launch {
-            try {
-                engineManager.activeEngine?.stop()
-            } catch (e: Exception) {
-                Timber.e(e, "Error stopping engine")
-            }
-
-            tunInterface?.close()
-            tunInterface = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            Timber.i("VPN stopped")
-        }
+    private suspend fun stopVpnInternal() {
+        if (connectUseCase.connectionState.value == ConnectionState.Disconnected) return
+        connectUseCase.updateState(ConnectionState.Disconnecting)
+        try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
+        try { tunInterface?.close() } catch (_: Exception) { }
+        tunInterface = null; currentConfig = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        connectUseCase.updateState(ConnectionState.Disconnected)
+        stopSelf()
     }
+
+    private fun buildTun(): ParcelFileDescriptor? = try {
+        Builder().apply {
+            setSession(NovaConfig.VPN_SESSION_NAME); setMtu(1500)
+            addAddress("10.0.0.2", 32)
+            addDnsServer("8.8.8.8"); addDnsServer("1.1.1.1")
+            addRoute("0.0.0.0", 0); setBlocking(true)
+        }.establish()
+    } catch (e: Exception) { Timber.e(e, "TUN failed"); null }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            getString(R.string.notification_channel_name),
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = getString(R.string.notification_channel_description)
-        }
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
+        val m = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        m.createNotificationChannel(NotificationChannel(
+            NOTIFICATION_CHANNEL_ID, getString(R.string.notification_channel_name),
+            NotificationManager.IMPORTANCE_LOW))
     }
 
     private fun createNotification(text: String): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
+        val pi = PendingIntent.getActivity(this, 0,
+            Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("NovaVPN")
-            .setContentText(text)
+            .setContentTitle("NovaVPN").setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_manage)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .setContentIntent(pi).setOngoing(text == "Connected")
+            .setPriority(NotificationCompat.PRIORITY_LOW).build()
     }
 
     private fun updateNotification(text: String) {
-        val notification = createNotification(text)
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NovaConfig.NOTIFICATION_ID, notification)
-    }
-
-    companion object {
-        const val ACTION_START = "com.novavpn.action.START_VPN"
-        const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
-        private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NovaConfig.NOTIFICATION_ID, createNotification(text))
     }
 }
