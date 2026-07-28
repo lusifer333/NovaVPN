@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.URI
 import java.net.URL
 import java.util.concurrent.TimeoutException
 import javax.inject.Inject
@@ -26,6 +28,19 @@ class SubscriptionImporter @Inject constructor(
      */
     suspend fun importFromUrl(url: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromUrl: fetching %s", url)
+
+        // Pre-resolve DNS for diagnostics
+        try {
+            val uri = java.net.URI(url)
+            val host = uri.host ?: "unknown"
+            Timber.tag(TAG).d("Resolving DNS for: %s", host)
+            val addresses = java.net.InetAddress.getAllByName(host)
+            Timber.tag(TAG).d("DNS resolved: %s → %d address(es): %s",
+                host, addresses.size, addresses.joinToString { it.hostAddress ?: "?" })
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "DNS resolution FAILED for URL: %s", url)
+            return emptyList()
+        }
 
         // Fetch URL content on IO dispatcher
         val rawText: String = withContext(Dispatchers.IO) {
@@ -51,8 +66,11 @@ class SubscriptionImporter @Inject constructor(
                 val text = connection.inputStream.bufferedReader().use { it.readText() }
                 connection.disconnect()
                 text
+            } catch (e: java.net.UnknownHostException) {
+                Timber.tag(TAG).e("DNS lookup failed for URL: %s — %s", url, e.message)
+                throw e
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "importFromUrl: fetch failed")
+                Timber.tag(TAG).e(e, "importFromUrl: fetch failed: %s", url)
                 throw e
             }
         }
