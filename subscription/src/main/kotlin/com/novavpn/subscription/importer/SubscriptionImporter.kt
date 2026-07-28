@@ -29,17 +29,16 @@ class SubscriptionImporter @Inject constructor(
     suspend fun importFromUrl(url: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromUrl: fetching %s", url)
 
-        // Pre-resolve DNS for diagnostics
+        // Pre-resolve DNS for diagnostics (log only — actual fetch will also fail)
         try {
             val uri = java.net.URI(url)
             val host = uri.host ?: "unknown"
             Timber.tag(TAG).d("Resolving DNS for: %s", host)
             val addresses = java.net.InetAddress.getAllByName(host)
-            Timber.tag(TAG).d("DNS resolved: %s → %d address(es): %s",
-                host, addresses.size, addresses.joinToString { it.hostAddress ?: "?" })
+            Timber.tag(TAG).d("DNS resolved: %s → %d address(es)", host, addresses.size)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "DNS resolution FAILED for URL: %s", url)
-            return emptyList()
+            Timber.tag(TAG).e(e, "DNS resolution FAILED — will try fetch anyway")
+            // Don't return — let the fetch fail with its own error
         }
 
         // Fetch URL content on IO dispatcher
