@@ -51,7 +51,7 @@ class GetBestServerUseCaseTest {
 
     @Test
     fun `returns best server from enabled subscription`() = runTest {
-        val score = ServerScore(serverId = "srv-1", connectionSuccessRate = 1.0)
+        val score = ServerScore(serverId = "srv-1", connectionSuccessRate = 1.0, lastSuccessfulTime = 1000L)
         coEvery { statsRepo.getAllScores() } returns listOf(score)
         coEvery { serverRepo.getById("srv-1") } returns enabledServer
         coEvery { serverRepo.isServerFromEnabledSubscription("srv-1") } returns true
@@ -65,7 +65,7 @@ class GetBestServerUseCaseTest {
 
     @Test
     fun `skips servers from disabled subscriptions`() = runTest {
-        val score = ServerScore(serverId = "srv-2", connectionSuccessRate = 1.0)
+        val score = ServerScore(serverId = "srv-2", connectionSuccessRate = 1.0, lastSuccessfulTime = 1000L)
         coEvery { statsRepo.getAllScores() } returns listOf(score)
         coEvery { serverRepo.getById("srv-2") } returns disabledServer
         coEvery { serverRepo.isServerFromEnabledSubscription("srv-2") } returns false
