@@ -165,8 +165,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("vnext", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     put("users", buildJsonArray {
                         add(buildJsonObject {
                             put("id", JsonPrimitive(id))
@@ -188,13 +188,13 @@ object XrayConfigParser {
         return buildJsonObject {
             put("vnext", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     put("users", buildJsonArray {
                         add(buildJsonObject {
                             put("id", JsonPrimitive(id))
                             put("encryption", JsonPrimitive(encryption))
-                            if (flow != null) put("flow", flow)
+                            if (flow != null) put("flow", JsonPrimitive(flow))
                         })
                     })
                 })
@@ -210,10 +210,10 @@ object XrayConfigParser {
         return buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     put("password", JsonPrimitive(password))
-                    if (flow != null) put("flow", flow)
+                    if (flow != null) put("flow", JsonPrimitive(flow))
                 })
             })
         }
@@ -230,8 +230,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     put("method", JsonPrimitive(method))
                     put("password", JsonPrimitive(password))
                     if (plugin != null) put("plugin", plugin)
@@ -249,8 +249,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     if (username != null) {
                         put("users", buildJsonArray {
                             add(buildJsonObject {
@@ -272,8 +272,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
-                    put("address", config.address)
-                    put("port", config.port)
+                    put("address", JsonPrimitive(config.address))
+                    put("port", JsonPrimitive(config.port))
                     if (username != null) {
                         put("users", buildJsonArray {
                             add(buildJsonObject {

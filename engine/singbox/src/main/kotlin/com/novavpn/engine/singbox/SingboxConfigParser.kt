@@ -118,8 +118,8 @@ object SingboxConfigParser {
      */
     private fun buildProxyOutbound(config: ServerConfig): JsonObject = buildJsonObject {
         put("tag", JsonPrimitive("proxy"))
-        put("server", config.address)
-        put("server_port", config.port)
+        put("server", JsonPrimitive(config.address))
+        put("server_port", JsonPrimitive(config.port))
 
         when (config.protocol) {
             Protocol.VMess -> {
@@ -184,7 +184,7 @@ object SingboxConfigParser {
 
         put("uuid", JsonPrimitive(uuid))
         put("encryption", JsonPrimitive(encryption))
-        if (flow != null) put("flow", flow)
+        if (flow != null) put("flow", JsonPrimitive(flow))
     }
 
     private fun JsonObjectBuilder.trojanFields(config: ServerConfig) {
