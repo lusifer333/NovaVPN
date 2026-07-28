@@ -67,14 +67,16 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            _(Add release notes here)_
+            - **Fixed:** Servers screen not showing parsed subscription servers
+              - Root cause: `SubscriptionParser` never set `ServerConfig.id`, causing all
+                servers to have `id=""` → Room PK collision → only last server survived.
+              - Fix: Generate unique UUID for each server before database insert.
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
 
             ### Notes
             This is a **pre-release** build. Not intended for production use.
-            Phase 2 (Real VPN Integration) is in progress.
           files: NovaVPN-*.apk
           prerelease: true
           draft: false
