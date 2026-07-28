@@ -7,98 +7,79 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.TimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Imports [ServerConfig] entries from subscription sources.
- *
- * Supports three import modes:
- * - [importFromUrl]: HTTP(S) GET with auto-detected encoding
- * - [importFromClipboard]: raw text pasted by the user
- * - [importFromFile]: content read from a local file
- */
 @Singleton
 class SubscriptionImporter @Inject constructor(
     private val parser: SubscriptionParser
 ) {
-
     companion object {
         private const val TAG = "SubscriptionImporter"
         private const val REQUEST_TIMEOUT_MS = 15_000
     }
 
     /**
-     * Fetch subscription content from [url] over HTTP(S), auto-detect the
-     * encoding from the Content-Type header (or fall back to UTF-8), and
-     * parse it into a list of [ServerConfig].
+     * Fetch subscription content from [url] and parse into server configs.
+     * Network IO runs on [Dispatchers.IO].
      */
-    suspend fun importFromUrl(url: String): List<ServerConfig> = withContext(Dispatchers.IO) {
+    suspend fun importFromUrl(url: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromUrl: fetching %s", url)
 
-        val result = try {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = REQUEST_TIMEOUT_MS
-            connection.readTimeout = REQUEST_TIMEOUT_MS
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("User-Agent", "NovaVPN/1.0")
-            connection.setRequestProperty("Accept", "*/*")
-            connection.setRequestProperty("Cache-Control", "no-cache")
-            connection.setRequestProperty("Connection", "close")
+        // Fetch URL content on IO dispatcher
+        val rawText: String = withContext(Dispatchers.IO) {
+            try {
+                val connection = URL(url).openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = REQUEST_TIMEOUT_MS
+                connection.readTimeout = REQUEST_TIMEOUT_MS
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "NovaVPN/1.0")
+                connection.setRequestProperty("Accept", "*/*")
+                connection.setRequestProperty("Cache-Control", "no-cache")
+                connection.setRequestProperty("Connection", "close")
 
-            val responseCode = connection.responseCode
-            Timber.tag(TAG).d("importFromUrl: HTTP %d for %s", responseCode, url)
+                val code = connection.responseCode
+                Timber.tag(TAG).d("importFromUrl: HTTP %d", code)
 
-            if (responseCode !in 200..399) {
-                Timber.tag(TAG).w("importFromUrl: HTTP %d for %s", responseCode, url)
-                return emptyList()
+                if (code !in 200..399) {
+                    connection.disconnect()
+                    throw RuntimeException("HTTP $code for $url")
+                }
+
+                val text = connection.inputStream.bufferedReader().use { it.readText() }
+                connection.disconnect()
+                text
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "importFromUrl: fetch failed")
+                throw e
             }
-
-            // Read the full response
-            val inputStream = connection.inputStream ?: return emptyList()
-            val text = inputStream.bufferedReader().use { it.readText() }
-            connection.disconnect()
-
-            Timber.tag(TAG).d("importFromUrl: received %d chars", text.length)
-
-            if (text.isBlank()) {
-                Timber.tag(TAG).w("importFromUrl: empty response from %s", url)
-                return emptyList()
-            }
-
-            val configs = parser.parse(text)
-            Timber.tag(TAG).d("importFromUrl: parsed %d server configs", configs.size)
-            configs
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "importFromUrl: failed to fetch %s", url)
-            emptyList()
         }
+
+        // Parse on current dispatcher
+        Timber.tag(TAG).d("importFromUrl: received %d chars", rawText.length)
+        if (rawText.isBlank()) {
+            Timber.tag(TAG).w("importFromUrl: empty response")
+            return emptyList()
+        }
+
+        val configs = parser.parse(rawText)
+        Timber.tag(TAG).d("importFromUrl: parsed %d configs", configs.size)
+        return configs
     }
 
-    /**
-     * Parse subscription content from clipboard text.
-     */
     suspend fun importFromClipboard(text: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromClipboard: %d chars", text.length)
-
         val configs = parser.parse(text)
-        Timber.tag(TAG).d("importFromClipboard: parsed %d server configs", configs.size)
+        Timber.tag(TAG).d("importFromClipboard: parsed %d configs", configs.size)
         return configs
     }
 
-    /**
-     * Parse subscription content from a file string.
-     */
     suspend fun importFromFile(content: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromFile: %d chars", content.length)
-
         val configs = parser.parse(content)
-        Timber.tag(TAG).d("importFromFile: parsed %d server configs", configs.size)
+        Timber.tag(TAG).d("importFromFile: parsed %d configs", configs.size)
         return configs
     }
-
-    // ------------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------------
 }
