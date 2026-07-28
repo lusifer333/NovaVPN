@@ -39,17 +39,13 @@ class ServerRepositoryImpl @Inject constructor(
         subscriptionId: String,
         servers: List<ServerConfig>
     ) {
-        Timber.tag("ServerRepo").d("[DEBUG-servers] replaceForSubscription: id=%s, %d servers", subscriptionId, servers.size)
-
-        // [DEBUG-servers] Check how many servers have blank IDs
-        val blankIdCount = servers.count { it.id.isBlank() }
-        Timber.tag("ServerRepo").w("[DEBUG-servers] %d of %d servers have BLANK id — will cause PK collision!", blankIdCount, servers.size)
+        Timber.tag("ServerRepo").d("replaceForSubscription: id=%s, %d servers", subscriptionId, servers.size)
 
         // Delete old servers for this subscription
         serverConfigDao.deleteBySubscription(subscriptionId)
-        Timber.tag("ServerRepo").d("[DEBUG-servers] Deleted old servers for %s", subscriptionId)
+        Timber.tag("ServerRepo").d("Deleted old servers for %s", subscriptionId)
 
-        // Insert new servers — generate unique ID if blank, must set subscriptionId on each entity
+        // Insert new servers — generate unique IDs and set subscriptionId on each entity
         val entities = servers.map { server ->
             val uniqueId = if (server.id.isBlank()) {
                 java.util.UUID.randomUUID().toString()
@@ -61,15 +57,10 @@ class ServerRepositoryImpl @Inject constructor(
                 subscriptionId = subscriptionId
             ).toEntity()
         }
-        Timber.tag("ServerRepo").d("[DEBUG-servers] Inserting %d entities with subscriptionId=%s", entities.size, subscriptionId)
-        Timber.tag("ServerRepo").d("[DEBUG-servers] Entity IDs: %s", entities.map { it.id.take(8) }.joinToString(", "))
+        Timber.tag("ServerRepo").d("Inserting %d servers with subscriptionId=%s", entities.size, subscriptionId)
 
         serverConfigDao.insertAll(entities)
-        Timber.tag("ServerRepo").d("[DEBUG-servers] Insert complete — inserted %d entities", entities.size)
-
-        // [DEBUG-servers] Immediately query DB to verify row count
-        val dbCount = serverConfigDao.getAllBySubscription(subscriptionId).size
-        Timber.tag("ServerRepo").w("[DEBUG-servers] DB readback after insert: %d rows for subscription %s", dbCount, subscriptionId)
+        Timber.tag("ServerRepo").d("Insert complete")
     }
 
     override suspend fun deleteBySubscription(subscriptionId: String) {

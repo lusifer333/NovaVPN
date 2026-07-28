@@ -40,9 +40,7 @@ class RefreshSubscriptionUseCase @Inject constructor(
         return try {
             // Step 1: HTTP fetch + parse
             val servers = importer.importFromUrl(sub.url)
-            Timber.tag(TAG).d("[DEBUG-servers] Parsed %d configs", servers.size)
-            val blankIds = servers.count { it.id.isBlank() }
-            Timber.tag(TAG).w("[DEBUG-servers] %d of %d parsed servers have BLANK id", blankIds, servers.size)
+            Timber.tag(TAG).d("Parsed %d configs", servers.size)
 
             // Step 2: Validate result
             if (servers.isEmpty()) {
@@ -62,7 +60,7 @@ class RefreshSubscriptionUseCase @Inject constructor(
 
             // Step 5: Verify
             val verify = serverRepo.observeBySubscription(subscriptionId).firstOrNull()
-            Timber.tag(TAG).w("[DEBUG-servers] Readback: %d servers in DB for sub %s", verify?.size ?: 0, subscriptionId)
+            Timber.tag(TAG).d("Readback: %d servers in DB", verify?.size ?: 0)
 
             Timber.tag(TAG).d("Refresh completed successfully")
             Result.success(servers)

@@ -29,7 +29,6 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:common"))
     implementation(project(":core:ui"))
-    implementation(libs.timber)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.bundles.compose)
