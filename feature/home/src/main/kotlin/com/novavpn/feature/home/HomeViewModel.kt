@@ -99,8 +99,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             try {
+                // Just send the stop intent — the service handles state transitions
                 vpnServiceStarter.stopVpn()
-                connectUseCase.disconnect()
             } finally {
                 _state.update {
                     it.copy(isLoading = false, errorMessage = null)
