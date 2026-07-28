@@ -46,15 +46,20 @@ object SubscriptionParser {
             return emptyList()
         }
 
-        return try {
-            val trimmed = raw.trim()
+        val trimmed = raw.trim()
+        Timber.tag(TAG).d("--- SubscriptionParser ---")
+        Timber.tag(TAG).d("Input: %d chars, starts with: %s",
+            trimmed.length, trimmed.take(80))
+        Timber.tag(TAG).d("Format detection: isBase64=%s, hasMulti=%s, isProxy=%s",
+            isProbablyBase64(trimmed), hasMultipleProxyLinks(trimmed), isProxyLink(trimmed))
 
+        return try {
             when {
+                // Multi-line proxy links (one per line) — check this FIRST
+                hasMultipleProxyLinks(trimmed) -> parseMultiLinkLines(trimmed)
+
                 // Single proxy link
                 isProxyLink(trimmed) -> listOfNotNull(parseSingleLink(trimmed))
-
-                // Multi-line proxy links (one per line)
-                hasMultipleProxyLinks(trimmed) -> parseMultiLinkLines(trimmed)
 
                 // JSON payload (SIP008, Xray, or Sing-box array)
                 trimmed.startsWith("[") || trimmed.startsWith("{") -> parseJsonPayload(trimmed)
@@ -398,6 +403,29 @@ object SubscriptionParser {
         return lines.size > 1 && lines.any { isProxyLink(it) }
     }
 
+    /**
+     * Filters out fake/metadata nodes that are not real proxy servers.
+     *
+     * Some subscription providers include placeholder entries with:
+     * - Localhost addresses (127.0.0.1, 0.0.0.0, localhost)
+     * - All-zero UUIDs or passwords
+     * - These carry metadata like traffic usage or expiry info
+     */
+    private fun isValidNode(config: ServerConfig): Boolean {
+        // Reject localhost/placeholder addresses
+        if (config.address == "127.0.0.1" || config.address == "0.0.0.0" ||
+            config.address == "localhost" || config.address == "::1") {
+            Timber.tag(TAG).d("Filtered out localhost node: %s", config.name)
+            return false
+        }
+        // Reject nodes with port 0
+        if (config.port <= 0 || config.port > 65535) {
+            Timber.tag(TAG).d("Filtered out invalid port: %s:%d", config.address, config.port)
+            return false
+        }
+        return true
+    }
+
     private fun parseSingleLink(link: String): ServerConfig? {
         return when {
             link.startsWith("vmess://") -> parseVmessLink(link)
@@ -412,10 +440,19 @@ object SubscriptionParser {
     }
 
     private fun parseMultiLinkLines(text: String): List<ServerConfig> {
-        return text.lines()
+        val lines = text.lines()
             .map { it.trim() }
             .filter { it.isNotBlank() && isProxyLink(it) }
-            .mapNotNull { parseSingleLink(it) }
+        Timber.tag(TAG).d("parseMultiLinkLines: %d proxy lines", lines.size)
+        val configs = lines.mapNotNull { parseSingleLink(it) }
+            .filter { isValidNode(it) }
+        Timber.tag(TAG).d("parseMultiLinkLines: parsed %d valid configs (filtered %d invalid)",
+            configs.size, lines.size - configs.size)
+        // Count by protocol
+        configs.groupBy { it.protocol }.forEach { (proto, list) ->
+            Timber.tag(TAG).d("  %s: %d", proto.displayName, list.size)
+        }
+        return configs
     }
 
     /**
@@ -432,9 +469,13 @@ object SubscriptionParser {
         Timber.tag(TAG).d("parseBase64Payload: decoded %d chars", decoded.length)
 
         val trimmed = decoded.trim()
+        Timber.tag(TAG).d("parseBase64Payload: decoded %d chars, first line: %s",
+            decoded.length, trimmed.lines().firstOrNull()?.take(80) ?: "?")
+
         return when {
-            isProxyLink(trimmed) -> listOfNotNull(parseSingleLink(trimmed))
+            // Multi-line — check FIRST before single link
             hasMultipleProxyLinks(trimmed) -> parseMultiLinkLines(trimmed)
+            isProxyLink(trimmed) -> listOfNotNull(parseSingleLink(trimmed))
             trimmed.startsWith("[") || trimmed.startsWith("{") -> parseJsonPayload(trimmed)
             else -> {
                 // Treat as plain text with potential line-based proxy links
