@@ -1,10 +1,9 @@
 package com.novavpn.engine.api
 
-import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.EngineType
+import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.ServerConfig
 import kotlinx.coroutines.flow.StateFlow
-
 /**
  * Abstract VPN engine interface.
  * All engine implementations (Xray, Sing-box, etc.) must implement this.

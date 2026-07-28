@@ -6,12 +6,7 @@ import com.novavpn.domain.model.ServerConfig
 import com.novavpn.engine.api.Engine
 import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineError
-import com.novavpn.engine.api.EngineKey
-import dagger.Binds
-import dagger.Module
-import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import dagger.multibindings.IntoMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -265,12 +260,3 @@ class XrayEngine @Inject constructor() : Engine {
  * Hilt module that contributes [XrayEngine] to the engine multibinding map
  * under [EngineType.Xray], enabling [com.novavpn.engine.api.EngineManagerImpl]
  * to discover it.
- */
-@Module
-@InstallIn(SingletonComponent::class)
-abstract class XrayEngineModule {
-    @Binds
-    @IntoMap
-    @EngineKey(EngineType.Xray)
-    abstract fun bindXrayEngine(engine: XrayEngine): Engine
-}

@@ -1,8 +1,11 @@
 package com.novavpn.app.di
 
 import android.content.Context
+import com.novavpn.domain.model.EngineType
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.api.EngineManagerImpl
+import com.novavpn.engine.singbox.SingboxEngine
+import com.novavpn.engine.xray.XrayEngine
 import com.novavpn.logging.NovaLogger
 import dagger.Module
 import dagger.Provides
@@ -17,7 +20,15 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideEngineManager(impl: EngineManagerImpl): EngineManager = impl
+    fun provideEngineManager(
+        impl: EngineManagerImpl,
+        xrayEngine: XrayEngine,
+        singboxEngine: SingboxEngine
+    ): EngineManager {
+        impl.register(EngineType.Xray, xrayEngine)
+        impl.register(EngineType.SingBox, singboxEngine)
+        return impl
+    }
 
     @Provides
     @Singleton
