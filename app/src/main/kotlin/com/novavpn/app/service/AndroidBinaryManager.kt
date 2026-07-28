@@ -13,10 +13,11 @@ import javax.inject.Singleton
 /**
  * Android implementation of [BinaryManager].
  *
- * Engine binaries must be placed at:
- *   app/src/main/assets/engines/<engine>/<arch>/<binary>
+ * Engine binaries are bundled in jniLibs/<abi>/lib<engine>.so
+ * which the system extracts to nativeLibraryDir with proper SELinux context
+ * and executable permissions during APK installation.
  *
- * Run `scripts/download-engines.sh` to download them before building the APK.
+ * Fallback: assets/engines/<engine>/<arch>/<binary> for development builds.
  */
 @Singleton
 class AndroidBinaryManager @Inject constructor(
@@ -27,27 +28,28 @@ class AndroidBinaryManager @Inject constructor(
         get() = File(context.filesDir, ENGINE_ROOT)
 
     override fun getEnginePath(type: EngineType): String? {
-        val bin = binaryFile(type)
-        if (bin.exists() && bin.canExecute()) {
-            Timber.tag(TAG).d("Engine binary found: %s (%d bytes)", bin.absolutePath, bin.length())
-            return bin.absolutePath
+        // 1. Check native library path first (jniLibs — system-installed)
+        val nativePath = nativeBinaryFile(type)
+        if (nativePath.exists() && nativePath.canExecute()) {
+            Timber.tag(TAG).d("Engine binary found in native lib: %s (%d bytes)",
+                nativePath.absolutePath, nativePath.length())
+            return nativePath.absolutePath
         }
-        // Check assets for embedded binary that hasn't been extracted yet
-        val assetPath = assetsPath(type)
-        try {
-            context.assets.open(assetPath).use { Timber.tag(TAG).d("Binary exists in assets: %s", assetPath) }
-        } catch (_: FileNotFoundException) {
-            Timber.tag(TAG).w("Binary NOT in assets at: %s", assetPath)
+
+        // 2. Check engine directory (previously extracted)
+        val extractedPath = binaryFile(type)
+        if (extractedPath.exists() && extractedPath.canExecute()) {
+            Timber.tag(TAG).d("Engine binary found in engine dir: %s", extractedPath.absolutePath)
+            return extractedPath.absolutePath
         }
+
         return null
     }
 
     override fun getEngineVersion(type: EngineType): String? {
-        // Try version file first
         val verFile = File(engineDirectory, "${type.name.lowercase()}.version")
         if (verFile.exists()) return verFile.readText().trim()
 
-        // Try reading from binary via --version
         val path = getEnginePath(type) ?: return null
         return try {
             val proc = Runtime.getRuntime().exec(arrayOf(path, "--version"))
@@ -60,57 +62,34 @@ class AndroidBinaryManager @Inject constructor(
         }
     }
 
-    override suspend fun ensureEngine(type: EngineType): Result<String> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    override suspend fun ensureEngine(type: EngineType): Result<String> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
-            // Check if already extracted
-            val existing = getEnginePath(type)
-            if (existing != null) {
-                Timber.tag(TAG).i("Engine already available: %s", existing)
-                return@runCatching existing
+            // 1. Check native library path first (best — proper SELinux context)
+            val nativePath = nativeBinaryFile(type)
+            if (nativePath.exists() && nativePath.canExecute()) {
+                // Copy to engine directory for persistence
+                val target = copyToEngineDir(nativePath, type)
+                Timber.tag(TAG).i("Engine ready from native lib: %s", target.absolutePath)
+                return@runCatching target.absolutePath
             }
 
-            val binFile = binaryFile(type)
-            binFile.parentFile?.mkdirs()
-
-            val assetPath = assetsPath(type)
-            Timber.tag(TAG).i("Extracting engine binary from assets: %s", assetPath)
-
-            // Try to extract from APK assets
-            val inputStream = try {
-                context.assets.open(assetPath)
-            } catch (e: FileNotFoundException) {
-                val msg = buildString {
-                    appendLine("Engine binary not found!")
-                    appendLine("  Path expected: app/src/main/assets/$assetPath")
-                    appendLine("  Run: scripts/download-engines.sh")
-                    appendLine("  Or download manually from:")
-                    appendLine("    Xray:    https://github.com/XTLS/Xray-core/releases")
-                    appendLine("    Sing-box: https://github.com/SagerNet/sing-box/releases")
-                }
-                throw FileNotFoundException(msg)
-            }
-
-            inputStream.use { input ->
-                binFile.outputStream().use { output ->
-                    input.copyTo(output)
+            // 2. Try extracting from native lib path if exists but not executable
+            if (nativePath.exists()) {
+                nativePath.setExecutable(true, false)
+                try {
+                    Runtime.getRuntime().exec(arrayOf("chmod", "755", nativePath.absolutePath))
+                        .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (_: Exception) { }
+                if (nativePath.canExecute()) {
+                    val target = copyToEngineDir(nativePath, type)
+                    Timber.tag(TAG).i("Engine fixed and copied: %s", target.absolutePath)
+                    return@runCatching target.absolutePath
                 }
             }
 
-            // Set executable permission — use both Java API and shell fallback
-            binFile.setExecutable(true)
-            try {
-                Runtime.getRuntime().exec(arrayOf("chmod", "755", binFile.absolutePath))
-                    .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-            } catch (_: Exception) {
-                Timber.tag(TAG).w("chmod fallback failed — ignoring")
-            }
-            if (!binFile.canExecute()) {
-                Timber.tag(TAG).w("Binary may not be executable: %s", binFile.absolutePath)
-            }
-
-            val sizeKb = binFile.length() / 1024
-            Timber.tag(TAG).i("Engine binary extracted: %s (%d KB)", binFile.absolutePath, sizeKb)
-            binFile.absolutePath
+            // 3. Fallback: extract from assets
+            extractFromAssets(type)
         }
     }
 
@@ -124,25 +103,82 @@ class AndroidBinaryManager @Inject constructor(
     // Private helpers
     // ---------------------------------------------------------------
 
-    private fun binaryFile(type: EngineType): File {
-        val arch = archName()
-        return File(engineDirectory, "${type.name.lowercase()}/$arch/${type.name.lowercase()}")
-    }
-
-    private fun assetsPath(type: EngineType): String {
-        val arch = archName()
-        return "engines/${type.name.lowercase()}/$arch/${type.name.lowercase()}"
-    }
-
-    private fun archName(): String {
+    private val abi: String by lazy {
         val abis = android.os.Build.SUPPORTED_ABIS
-        return when {
+        when {
             abis.any { it.startsWith("arm64") } -> "arm64-v8a"
             abis.any { it.startsWith("x86_64") } -> "x86_64"
             abis.any { it.startsWith("x86") } -> "x86"
             abis.any { it.startsWith("armeabi") } -> "armeabi-v7a"
             else -> "arm64-v8a"
         }
+    }
+
+    private val libPrefix: String
+        get() = "lib"
+
+    private fun nativeBinaryFile(type: EngineType): File {
+        // jniLibs/<abi>/lib<engine>.so → nativeLibraryDir/lib<engine>.so
+        val libName = "${libPrefix}${type.name.lowercase()}.so"
+        return File(context.applicationInfo.nativeLibraryDir, libName)
+    }
+
+    private fun binaryFile(type: EngineType): File {
+        return File(engineDirectory, "${type.name.lowercase()}/$abi/${type.name.lowercase()}")
+    }
+
+    private fun copyToEngineDir(source: File, type: EngineType): File {
+        val target = binaryFile(type)
+        target.parentFile?.mkdirs()
+        source.inputStream().use { input ->
+            target.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        target.setExecutable(true, false)
+        Timber.tag(TAG).d("Copied engine %s to %s (%d bytes)",
+            type.name, target.absolutePath, target.length())
+        return target
+    }
+
+    private fun extractFromAssets(type: EngineType): String {
+        val assetPath = assetsPath(type)
+        val binFile = binaryFile(type)
+        binFile.parentFile?.mkdirs()
+
+        Timber.tag(TAG).i("Extracting engine from assets: %s", assetPath)
+        val inputStream = try {
+            context.assets.open(assetPath)
+        } catch (e: FileNotFoundException) {
+            val msg = buildString {
+                appendLine("Engine binary not found in assets or native libs!")
+                appendLine("  Native lib expected: app/src/main/jniLibs/$abi/lib${type.name.lowercase()}.so")
+                appendLine("  Assets fallback: app/src/main/assets/$assetPath")
+                appendLine("  Run: scripts/download-engines.sh")
+            }
+            throw FileNotFoundException(msg)
+        }
+
+        inputStream.use { input ->
+            binFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        // Set executable permission
+        binFile.setExecutable(true, false)
+        try {
+            Runtime.getRuntime().exec(arrayOf("chmod", "755", binFile.absolutePath))
+                .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: Exception) { }
+
+        val sizeKb = binFile.length() / 1024
+        Timber.tag(TAG).i("Engine extracted from assets: %s (%d KB)", binFile.absolutePath, sizeKb)
+        return binFile.absolutePath
+    }
+
+    private fun assetsPath(type: EngineType): String {
+        return "engines/${type.name.lowercase()}/$abi/${type.name.lowercase()}"
     }
 
     companion object {
