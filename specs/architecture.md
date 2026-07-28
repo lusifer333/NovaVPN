@@ -226,11 +226,42 @@ Composite score: 7 parameters → 0..100 score → ranked for auto-connect.
 | Log entries | Room (`LogEntryEntity`) | Auto-increment ID |
 | App settings | DataStore (JSON) | `app_settings.json` |
 
-## 7. Security Architecture
+## 8. Final Toolchain Versions
 
-- VPN permission requested via `VpnService.prepare()`
-- Foreground service with persistent notification
-- Boot receiver for auto-start (requires user opt-in)
-- Subscription data stored in app-private Room database
-- Engine binaries in app private directory
-- No secrets in source code
+| Component | Version |
+|---|---|
+| Gradle | 8.5 |
+| Android Gradle Plugin | 8.2.2 |
+| Kotlin | 2.0.0 |
+| KSP | 2.0.0-1.0.24 |
+| Compose Compiler | auto via `org.jetbrains.kotlin.plugin.compose` |
+| Compose BOM | 2024.02.00 |
+| Hilt | 2.51 |
+| Room | 2.6.1 |
+| DataStore | 1.0.0 |
+| kotlinx-serialization | 1.6.3 |
+| kotlinx-coroutines | 1.7.3 |
+| JDK (CI) | Temurin 17 |
+| Min SDK | 26 (Android 8.0) |
+| Target SDK | 34 (Android 14) |
+
+## 9. Migration History
+
+### Kotlin 2.0 — Compose Compiler Plugin
+
+The project was migrated from Kotlin 1.9.22 to 2.0.0. Key changes:
+
+1. **Compose compiler**: Removed `composeOptions { kotlinCompilerExtensionVersion = "..." }` from all modules. Applied `org.jetbrains.kotlin.plugin.compose` plugin instead. The compiler version auto-matches the Kotlin version.
+
+2. **kotlinx-serialization 1.6.3**: API changes required migration:
+   - `.contentOrNull` → `.content` (removed in 1.6.3)
+   - `add(String)`, `put(String, String)` → requires explicit `JsonPrimitive` wrapper
+   - `JsonObjectBuilder` needed explicit import
+
+3. **Hilt**: Upgraded from 2.50 to 2.51. Dagger multibinding with `Map<EngineType, Lazy<Engine>>` was replaced with direct engine registration in `EngineManagerImpl.register()`.
+
+4. **Android 14**: Added `foregroundServiceType="specialUse"` to VPN service manifest.
+
+5. **KSP**: Upgraded from 1.9.22-1.0.17 to 2.0.0-1.0.24.
+
+
