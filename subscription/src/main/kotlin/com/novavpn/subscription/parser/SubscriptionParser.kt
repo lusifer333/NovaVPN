@@ -93,8 +93,8 @@ object SubscriptionParser {
             }
 
             val obj = json.decodeFromString<JsonObject>(decoded)
-            val add = obj["add"]?.jsonPrimitive?.contentOrNull ?: ""
-            val portStr = obj["port"]?.jsonPrimitive?.contentOrNull ?: "0"
+            val add = obj["add"]?.jsonPrimitive?.content ?: ""
+            val portStr = obj["port"]?.jsonPrimitive?.content ?: "0"
             val port = portStr.toIntOrNull() ?: 0
 
             if (add.isBlank() || port <= 0) {
@@ -102,15 +102,15 @@ object SubscriptionParser {
                 return null
             }
 
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: ""
-            val aid = obj["aid"]?.jsonPrimitive?.contentOrNull ?: "0"
-            val scy = obj["scy"]?.jsonPrimitive?.contentOrNull ?: "auto"
-            val net = obj["net"]?.jsonPrimitive?.contentOrNull ?: "tcp"
-            val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: "none"
-            val tlsVal = obj["tls"]?.jsonPrimitive?.contentOrNull ?: ""
-            val path = obj["path"]?.jsonPrimitive?.contentOrNull ?: ""
-            val host = obj["host"]?.jsonPrimitive?.contentOrNull ?: ""
-            val ps = obj["ps"]?.jsonPrimitive?.contentOrNull ?: ""
+            val id = obj["id"]?.jsonPrimitive?.content ?: ""
+            val aid = obj["aid"]?.jsonPrimitive?.content ?: "0"
+            val scy = obj["scy"]?.jsonPrimitive?.content ?: "auto"
+            val net = obj["net"]?.jsonPrimitive?.content ?: "tcp"
+            val type = obj["type"]?.jsonPrimitive?.content ?: "none"
+            val tlsVal = obj["tls"]?.jsonPrimitive?.content ?: ""
+            val path = obj["path"]?.jsonPrimitive?.content ?: ""
+            val host = obj["host"]?.jsonPrimitive?.content ?: ""
+            val ps = obj["ps"]?.jsonPrimitive?.content ?: ""
 
             val security = when {
                 tlsVal.equals("tls", ignoreCase = true) -> Security.TLS
@@ -494,13 +494,13 @@ object SubscriptionParser {
      */
     private fun parseSip008Server(obj: JsonObject): ServerConfig? {
         return try {
-            val server = obj["server"]?.jsonPrimitive?.contentOrNull ?: ""
-            val port = obj["server_port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val server = obj["server"]?.jsonPrimitive?.content ?: ""
+            val port = obj["server_port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
             if (server.isBlank() || port <= 0) return null
 
-            val remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: ""
-            val method = obj["method"]?.jsonPrimitive?.contentOrNull ?: ""
-            val password = obj["password"]?.jsonPrimitive?.contentOrNull ?: ""
+            val remarks = obj["remarks"]?.jsonPrimitive?.content ?: ""
+            val method = obj["method"]?.jsonPrimitive?.content ?: ""
+            val password = obj["password"]?.jsonPrimitive?.content ?: ""
 
             ServerConfig(
                 name = remarks.ifBlank { "${server}:${port}" },
@@ -531,10 +531,10 @@ object SubscriptionParser {
         for (element in outbounds) {
             if (element !is JsonObject) continue
             try {
-                val protocol = element["protocol"]?.jsonPrimitive?.contentOrNull ?: continue
+                val protocol = element["protocol"]?.jsonPrimitive?.content ?: continue
                 val settings = element["settings"]?.jsonObject ?: continue
                 val streamSettings = element["streamSettings"]?.jsonObject
-                val tag = element["tag"]?.jsonPrimitive?.contentOrNull ?: ""
+                val tag = element["tag"]?.jsonPrimitive?.content ?: ""
 
                 val vnext = settings["vnext"]?.jsonArray
                 val servers = settings["servers"]?.jsonArray
@@ -544,9 +544,9 @@ object SubscriptionParser {
                         if (vnext != null) {
                             for (v in vnext) {
                                 if (v !is JsonObject) continue
-                                val address = v["address"]?.jsonPrimitive?.contentOrNull ?: ""
-                                val port = v["port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-                                val id = v["id"]?.jsonPrimitive?.contentOrNull ?: ""
+                                val address = v["address"]?.jsonPrimitive?.content ?: ""
+                                val port = v["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                val id = v["id"]?.jsonPrimitive?.content ?: ""
                                 if (address.isBlank() || port <= 0) continue
 
                                 val proto = if (protocol == "vmess") Protocol.VMess else Protocol.VLESS
@@ -571,8 +571,8 @@ object SubscriptionParser {
                         if (servers != null) {
                             for (s in servers) {
                                 if (s !is JsonObject) continue
-                                val address = s["address"]?.jsonPrimitive?.contentOrNull ?: ""
-                                val port = s["port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                                val address = s["address"]?.jsonPrimitive?.content ?: ""
+                                val port = s["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
                                 if (address.isBlank() || port <= 0) continue
 
                                 val (transport, security) = parseStreamSettings(streamSettings)
@@ -596,8 +596,8 @@ object SubscriptionParser {
                         if (servers != null) {
                             for (s in servers) {
                                 if (s !is JsonObject) continue
-                                val address = s["address"]?.jsonPrimitive?.contentOrNull ?: ""
-                                val port = s["port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                                val address = s["address"]?.jsonPrimitive?.content ?: ""
+                                val port = s["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
                                 if (address.isBlank() || port <= 0) continue
 
                                 results.add(
@@ -630,8 +630,8 @@ object SubscriptionParser {
     private fun parseStreamSettings(ss: JsonObject?): Pair<Transport, Security> {
         if (ss == null) return Transport.TCP to Security.None
 
-        val network = ss["network"]?.jsonPrimitive?.contentOrNull ?: "tcp"
-        val securityStr = ss["security"]?.jsonPrimitive?.contentOrNull ?: "none"
+        val network = ss["network"]?.jsonPrimitive?.content ?: "tcp"
+        val securityStr = ss["security"]?.jsonPrimitive?.content ?: "none"
 
         val transport = when (network.lowercase()) {
             "ws", "websocket" -> Transport.WebSocket
