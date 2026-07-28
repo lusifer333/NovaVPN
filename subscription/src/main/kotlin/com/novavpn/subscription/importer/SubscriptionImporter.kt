@@ -2,6 +2,8 @@ package com.novavpn.subscription.importer
 
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.subscription.parser.SubscriptionParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.net.HttpURLConnection
 import java.net.URL
@@ -31,10 +33,10 @@ class SubscriptionImporter @Inject constructor(
      * encoding from the Content-Type header (or fall back to UTF-8), and
      * parse it into a list of [ServerConfig].
      */
-    suspend fun importFromUrl(url: String): List<ServerConfig> {
+    suspend fun importFromUrl(url: String): List<ServerConfig> = withContext(Dispatchers.IO) {
         Timber.tag(TAG).d("importFromUrl: fetching %s", url)
 
-        return try {
+        val result = try {
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = REQUEST_TIMEOUT_MS
@@ -99,25 +101,4 @@ class SubscriptionImporter @Inject constructor(
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
-
-    /**
-     * Extract the charset from a Content-Type header value.
-     * Examples: "text/plain; charset=utf-8" → "UTF-8"
-     *           "application/octet-stream" → "UTF-8"
-     */
-    private fun extractCharset(contentType: String): String {
-        if (contentType.isBlank()) return "UTF-8"
-
-        for (part in contentType.split(";")) {
-            val trimmed = part.trim()
-            if (trimmed.startsWith("charset", ignoreCase = true)) {
-                val eqIdx = trimmed.indexOf('=')
-                if (eqIdx >= 0) {
-                    val charset = trimmed.substring(eqIdx + 1).trim().uppercase()
-                    if (charset.isNotBlank()) return charset
-                }
-            }
-        }
-        return "UTF-8"
-    }
 }
