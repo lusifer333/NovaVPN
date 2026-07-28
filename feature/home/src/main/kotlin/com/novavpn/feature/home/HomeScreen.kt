@@ -68,6 +68,7 @@ fun HomeScreen(
                 } ?: "No server selected",
                 serverAddress = displayServer?.let { "${it.address}:${it.port}" } ?: "",
                 isLoading = state.isLoading,
+                errorMessage = state.errorMessage,
                 onConnect = {
                     // Check VPN permission before connecting
                     val intent = android.net.VpnService.prepare(context)
@@ -199,16 +200,19 @@ private fun ConnectionCard(
     serverName: String,
     serverAddress: String,
     isLoading: Boolean,
+    errorMessage: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
 ) {
     val isConnected = state == ConnectionState.Connected
+    val isError = state == ConnectionState.Error
+    val showDisconnect = isConnected || isError
     val buttonColor by animateColorAsState(
-        targetValue = if (isConnected) StatusError else MaterialTheme.colorScheme.primary,
+        targetValue = if (showDisconnect) StatusError else MaterialTheme.colorScheme.primary,
         label = "buttonColor"
     )
-    val buttonIcon = if (isConnected) Icons.Default.Stop else Icons.Default.PlayArrow
-    val buttonLabel = if (isConnected) "Disconnect" else "Connect"
+    val buttonIcon = if (showDisconnect) Icons.Default.Stop else Icons.Default.PlayArrow
+    val buttonLabel = if (showDisconnect) "Disconnect" else "Connect"
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -283,9 +287,26 @@ private fun ConnectionCard(
 
             Spacer(Modifier.height(24.dp))
 
+            // Error message
+            if (isError && errorMessage != null) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = StatusError.copy(alpha = 0.1f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = StatusError,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
             // Connect/Disconnect button
             Button(
-                onClick = if (isConnected) onDisconnect else onConnect,
+                onClick = if (showDisconnect) onDisconnect else onConnect,
                 enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
                 modifier = Modifier

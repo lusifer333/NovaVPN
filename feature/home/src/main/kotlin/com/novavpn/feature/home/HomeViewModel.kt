@@ -20,7 +20,8 @@ data class HomeUiState(
     val selectedServer: ServerConfig? = null,
     val serverList: List<ServerConfig> = emptyList(),
     val stats: ConnectionStats = ConnectionStats(),
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null
 )
 
 @HiltViewModel
@@ -37,13 +38,22 @@ class HomeViewModel @Inject constructor(
     init {
         // Observe connection state
         viewModelScope.launch {
-            observeConnectionState().collect { connState ->
+            combine(
+                observeConnectionState(),
+                connectUseCase.lastError
+            ) { connState, error ->
                 val currentServer = if (connState == ConnectionState.Connected) {
                     connectUseCase.currentServerId?.let { id -> serverRepository.getById(id) }
                 } else null
-                _state.update {
-                    it.copy(connectionState = connState, currentServer = currentServer)
-                }
+                HomeUiState(
+                    connectionState = connState,
+                    currentServer = currentServer,
+                    selectedServer = _state.value.selectedServer,
+                    serverList = _state.value.serverList,
+                    errorMessage = if (connState == ConnectionState.Error) error else null
+                )
+            }.collect { newState ->
+                _state.value = newState
             }
         }
 
@@ -64,7 +74,7 @@ class HomeViewModel @Inject constructor(
 
     fun connect(server: ServerConfig) {
         viewModelScope.launch {
-            _state.update { it.copy(isLoading = true) }
+            _state.update { it.copy(isLoading = true, errorMessage = null) }
             try {
                 val accepted = connectUseCase.connect(server)
                 if (accepted) {
@@ -81,16 +91,27 @@ class HomeViewModel @Inject constructor(
         connect(server)
     }
 
+    /**
+     * Force disconnect — stops service + engine + resets state.
+     * Works from any state (Connected, Error, Connecting).
+     */
     fun disconnect() {
         viewModelScope.launch {
-            vpnServiceStarter.stopVpn()
-            connectUseCase.disconnect()
+            _state.update { it.copy(isLoading = true) }
+            try {
+                vpnServiceStarter.stopVpn()
+                connectUseCase.disconnect()
+            } finally {
+                _state.update {
+                    it.copy(isLoading = false, errorMessage = null)
+                }
+            }
         }
     }
 
     fun autoConnectToBest() {
         viewModelScope.launch {
-            _state.update { it.copy(isLoading = true) }
+            _state.update { it.copy(isLoading = true, errorMessage = null) }
             try {
                 val best = _state.value.serverList.firstOrNull()
                 if (best != null) {
@@ -114,6 +135,6 @@ class HomeViewModel @Inject constructor(
     /** Called when VPN permission is denied by user. */
     fun onVpnPermissionDenied() {
         connectUseCase.updateState(ConnectionState.Error)
-        _state.update { it.copy(connectionState = ConnectionState.Error) }
+        _state.update { it.copy(connectionState = ConnectionState.Error, errorMessage = "VPN permission denied") }
     }
 }

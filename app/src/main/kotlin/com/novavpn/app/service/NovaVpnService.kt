@@ -17,6 +17,7 @@ import com.novavpn.domain.model.NovaConfig
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.engine.api.EngineContext
+import com.novavpn.engine.api.EngineError
 import com.novavpn.engine.api.EngineManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -79,7 +80,8 @@ class NovaVpnService : VpnService() {
         connectionJob?.cancel()
         connectionJob = serviceScope.launch {
             try { connect(config) } catch (e: Exception) {
-                Timber.e(e, "VPN failed"); connectUseCase.updateState(ConnectionState.Error)
+                Timber.e(e, "VPN failed")
+                connectUseCase.updateState(ConnectionState.Error, e.message ?: "VPN failed")
                 updateNotification("Connection failed")
             }
         }
@@ -103,20 +105,23 @@ class NovaVpnService : VpnService() {
         updateNotification("Connecting…")
 
         val cfg = config ?: run {
-            connectUseCase.updateState(ConnectionState.Error)
+            connectUseCase.updateState(ConnectionState.Error, "No server config provided")
             updateNotification("No server"); return
         }
 
+        Timber.tag(TAG).d("Connecting to %s (%s:%d, %s)", cfg.name, cfg.address, cfg.port, cfg.protocol)
+
         val tun = buildTun() ?: run {
-            connectUseCase.updateState(ConnectionState.Error)
+            connectUseCase.updateState(ConnectionState.Error, "TUN interface failed to establish")
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
 
         val engine = engineManager.activeEngine ?: run {
-            connectUseCase.updateState(ConnectionState.Error)
+            connectUseCase.updateState(ConnectionState.Error, "No engine selected")
             updateNotification("No engine"); return
         }
+        Timber.tag(TAG).d("Active engine: %s", engine.type.displayName)
 
         val ctx = object : EngineContext {
             override val isVpnPermissionGranted = true
@@ -125,25 +130,35 @@ class NovaVpnService : VpnService() {
             override val routes = listOf("0.0.0.0/0")
         }
 
-        engine.initialize(ctx).onFailure {
-            connectUseCase.updateState(ConnectionState.Error); updateNotification("Init failed"); return
+        Timber.tag(TAG).d("Initializing engine...")
+        engine.initialize(ctx).onFailure { error ->
+            val msg = "Engine init failed: ${error.message}"
+            Timber.tag(TAG).e(msg)
+            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Init failed"); return
         }
-        engine.start(cfg).onFailure {
-            connectUseCase.updateState(ConnectionState.Error); updateNotification("Start failed"); return
+        Timber.tag(TAG).d("Engine initialized, starting...")
+        engine.start(cfg).onFailure { error ->
+            val msg = "Engine start failed: ${error.message}"
+            Timber.tag(TAG).e(msg)
+            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Start failed"); return
         }
 
+        Timber.tag(TAG).d("Waiting for engine Running state...")
         val running = try {
-            withTimeout(15_000L) {
+            withTimeout(30_000L) {
                 engine.state.first { it == EngineRuntimeState.Running || it == EngineRuntimeState.Crashed }
             }
         } catch (_: TimeoutCancellationException) {
-            engine.stop(); connectUseCase.updateState(ConnectionState.Error)
-            updateNotification("Timeout"); return
+            engine.stop()
+            val msg = "Engine start timed out after 30s"
+            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Timeout"); return
         }
         if (running == EngineRuntimeState.Crashed) {
-            connectUseCase.updateState(ConnectionState.Error); updateNotification("Crashed"); return
+            val msg = "Engine process crashed during startup"
+            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Crashed"); return
         }
 
+        Timber.tag(TAG).i("VPN CONNECTED to %s via %s", cfg.name, engine.type.displayName)
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 

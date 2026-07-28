@@ -19,6 +19,9 @@ class ConnectUseCase @Inject constructor(
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     private var currentServer: ServerConfig? = null
 
     val currentServerId: String? get() = currentServer?.id
@@ -28,13 +31,14 @@ class ConnectUseCase @Inject constructor(
      * the connection is rejected and state remains unchanged.
      */
     suspend fun connect(server: ServerConfig): Boolean {
-        // Safety check: reject connection if server belongs to a disabled subscription
         if (!serverRepository.isServerFromEnabledSubscription(server.id)) {
             Timber.tag(TAG).w("connect: server %s belongs to a disabled subscription — rejected", server.id.take(8))
+            _lastError.value = "Server belongs to a disabled subscription"
             return false
         }
 
         _connectionState.value = ConnectionState.Connecting
+        _lastError.value = null
         currentServer = server
         return true
     }
@@ -43,10 +47,12 @@ class ConnectUseCase @Inject constructor(
         _connectionState.value = ConnectionState.Disconnecting
         currentServer = null
         _connectionState.value = ConnectionState.Disconnected
+        _lastError.value = null
     }
 
-    fun updateState(state: ConnectionState) {
+    fun updateState(state: ConnectionState, error: String? = null) {
         _connectionState.value = state
+        if (error != null) _lastError.value = error
     }
 
     /**
