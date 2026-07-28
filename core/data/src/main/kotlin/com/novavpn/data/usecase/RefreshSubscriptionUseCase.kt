@@ -2,7 +2,6 @@ package com.novavpn.data.usecase
 
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.repository.ServerRepository
-import com.novavpn.domain.repository.StatisticsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
 import com.novavpn.subscription.importer.SubscriptionImporter
 import kotlinx.coroutines.flow.firstOrNull
@@ -10,13 +9,19 @@ import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * Fetches a subscription URL, parses it into server configs,
- * and replaces the stored servers for that subscription.
+ * Fetches subscription URL, parses, stores servers.
+ *
+ * Returns [Result.failure] when:
+ * - Subscription not found in database
+ * - Network error (DNS, timeout, HTTP error)
+ * - Response is empty or contains no valid server configs
+ *
+ * Returns [Result.success] only when all steps complete:
+ * HTTP fetch → parse → store → mark updated
  */
 class RefreshSubscriptionUseCase @Inject constructor(
     private val subscriptionRepo: SubscriptionRepository,
     private val serverRepo: ServerRepository,
-    private val statsRepo: StatisticsRepository,
     private val importer: SubscriptionImporter
 ) {
     suspend operator fun invoke(subscriptionId: String): Result<List<ServerConfig>> {
@@ -26,42 +31,41 @@ class RefreshSubscriptionUseCase @Inject constructor(
         val sub = subscriptionRepo.getById(subscriptionId)
         if (sub == null) {
             Timber.tag(TAG).e("Subscription not found: %s", subscriptionId)
-            return Result.failure(Exception("Subscription not found: $subscriptionId"))
+            return Result.failure(Exception("Subscription not found"))
         }
 
-        Timber.tag(TAG).d("Found subscription: '%s' URL=%s", sub.name, sub.url)
-        Timber.tag(TAG).d("Fetching servers from URL...")
+        Timber.tag(TAG).d("URL: %s", sub.url)
+        Timber.tag(TAG).d("Fetching...")
 
         return try {
+            // Step 1: HTTP fetch + parse
             val servers = importer.importFromUrl(sub.url)
-            Timber.tag(TAG).d("Fetched %d server configs", servers.size)
+            Timber.tag(TAG).d("Parsed %d configs", servers.size)
 
+            // Step 2: Validate result
             if (servers.isEmpty()) {
-                Timber.tag(TAG).w("No servers parsed — subscription may be empty or unreachable")
-            } else {
-                servers.forEachIndexed { i, s ->
-                    Timber.tag(TAG).d("  [%d] %s (%s:%d protocol=%s)", i, s.name, s.address, s.port, s.protocol)
-                }
+                Timber.tag(TAG).w("No valid servers found")
+                return Result.failure(Exception(
+                    "Subscription contains no valid servers. " +
+                    "The URL may be expired, invalid, or the format is unsupported."
+                ))
             }
 
-            // Replace servers in database
+            // Step 3: Replace servers in database
             serverRepo.replaceForSubscription(subscriptionId, servers)
-            Timber.tag(TAG).d("Replaced %d servers in database", servers.size)
+            Timber.tag(TAG).d("Stored %d servers", servers.size)
 
-            // Clean up orphaned test results and scores
-            Timber.tag(TAG).d("Cleaning up orphaned stats data")
-
-            // Mark subscription as updated
+            // Step 4: Mark subscription as updated
             subscriptionRepo.markUpdated(subscriptionId)
-            Timber.tag(TAG).d("Subscription marked as updated")
 
-            // Verify by reading back
+            // Step 5: Verify
             val verify = serverRepo.observeBySubscription(subscriptionId).firstOrNull()
-            Timber.tag(TAG).d("Verification: observeBySubscription returns %d servers", verify?.size ?: 0)
+            Timber.tag(TAG).d("Readback: %d servers in DB", verify?.size ?: 0)
 
+            Timber.tag(TAG).d("Refresh completed successfully")
             Result.success(servers)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed to refresh subscription: %s", subscriptionId)
+            Timber.tag(TAG).e(e, "Refresh failed")
             Result.failure(e)
         }
     }
