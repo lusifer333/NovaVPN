@@ -255,7 +255,4 @@ class SingboxEngine @Inject constructor() : Engine {
     }
 }
 
-/**
- * Hilt module that contributes [SingboxEngine] to the engine multibinding map
- * under [EngineType.SingBox], enabling [com.novavpn.engine.api.EngineManagerImpl]
- * to discover it.
+}

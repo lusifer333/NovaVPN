@@ -256,7 +256,4 @@ class XrayEngine @Inject constructor() : Engine {
     }
 }
 
-/**
- * Hilt module that contributes [XrayEngine] to the engine multibinding map
- * under [EngineType.Xray], enabling [com.novavpn.engine.api.EngineManagerImpl]
- * to discover it.
+}
