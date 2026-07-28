@@ -154,7 +154,27 @@ class XrayEngine @Inject constructor(
                 configFile = tempFile
                 Timber.tag(TAG).d("Config written to %s", tempFile.absolutePath)
 
-                // 4. Start the xray subprocess
+                // 4. Debug: comprehensive binary check before execution
+                val binFile = java.io.File(binaryPath)
+                Timber.tag(TAG).d("Binary check: exists=%s, size=%d, readable=%s, executable=%s",
+                    binFile.exists(), binFile.length(),
+                    binFile.canRead(), binFile.canExecute())
+                Timber.tag(TAG).d("Binary path absolute: %s", binFile.absolutePath)
+                Timber.tag(TAG).d("Binary parent dir: exists=%s, readable=%s, executable=%s",
+                    binFile.parentFile?.exists(), binFile.parentFile?.canRead(), binFile.parentFile?.canExecute())
+
+                // Force permission again right before execution
+                binFile.setExecutable(true, false)
+                try {
+                    val proc = Runtime.getRuntime().exec(arrayOf("chmod", "755", binFile.absolutePath))
+                    proc.waitFor(3, TimeUnit.SECONDS)
+                    Timber.tag(TAG).d("chmod 755 exit: %d", proc.exitValue())
+                } catch (e: Exception) {
+                    Timber.tag(TAG).w("chmod failed before exec: %s", e.message)
+                }
+                Timber.tag(TAG).d("After chmod: executable=%s", binFile.canExecute())
+
+                // 5. Start the xray subprocess
                 val pb = ProcessBuilder(
                     binaryPath, "run", "-c", tempFile.absolutePath
                 )
