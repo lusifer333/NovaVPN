@@ -77,9 +77,8 @@ object XrayConfigParser {
             put("listen", JsonPrimitive("127.0.0.1"))
             put("port", 10808)
             put("protocol", JsonPrimitive("socks"))
-            val _settings_1 = buildJsonObject {
+            put("settings", buildJsonObject {
                 put("auth", JsonPrimitive("noauth"))
-            put("settings", _settings_1)
                 put("udp", JsonPrimitive(true))
             })
             put("tag", JsonPrimitive("socks-in"))
@@ -88,8 +87,7 @@ object XrayConfigParser {
             put("listen", JsonPrimitive("127.0.0.1"))
             put("port", 10809)
             put("protocol", JsonPrimitive("http"))
-            val _settings_empty = buildJsonObject { }
-            put("settings", _settings_empty)
+            put("settings", buildJsonObject { })
             put("tag", JsonPrimitive("http-in"))
         })
     }
@@ -149,8 +147,7 @@ object XrayConfigParser {
             }
             Protocol.Unknown -> {
                 put("protocol", JsonPrimitive("freedom"))
-                val _settings_empty = buildJsonObject { }
-            put("settings", _settings_empty)
+                put("settings", buildJsonObject { })
             }
         }
     }
@@ -166,19 +163,18 @@ object XrayConfigParser {
         val security = raw?.get("security")?.jsonPrimitive?.content ?: "auto"
 
         return buildJsonObject {
-            val _vnext_2 = buildJsonArray {
+            put("vnext", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
-                    val _users_1 = buildJsonArray {
+                    put("users", buildJsonArray {
                         add(buildJsonObject {
                             put("id", JsonPrimitive(id))
                             put("alterId", JsonPrimitive(aid))
                             put("security", JsonPrimitive(security))
                         })
                     })
-                }
-            put("vnext", _vnext_2)
+                })
             })
         }
     }
@@ -190,19 +186,18 @@ object XrayConfigParser {
         val flow = raw?.get("flow")?.jsonPrimitive?.content
 
         return buildJsonObject {
-            val _vnext_3 = buildJsonArray {
+            put("vnext", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
-                    val _users_2 = buildJsonArray {
+                    put("users", buildJsonArray {
                         add(buildJsonObject {
                             put("id", JsonPrimitive(id))
                             put("encryption", JsonPrimitive(encryption))
                             if (flow != null) put("flow", JsonPrimitive(flow))
                         })
                     })
-                }
-            put("vnext", _vnext_3)
+                })
             })
         }
     }
@@ -213,14 +208,13 @@ object XrayConfigParser {
         val flow = raw?.get("flow")?.jsonPrimitive?.content
 
         return buildJsonObject {
-            val _servers_4 = buildJsonArray {
+            put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
                     put("password", JsonPrimitive(password))
                     if (flow != null) put("flow", JsonPrimitive(flow))
-                }
-            put("servers", _servers_4)
+                })
             })
         }
     }
@@ -234,7 +228,7 @@ object XrayConfigParser {
             ?: raw?.get("plugin_opts")?.jsonPrimitive?.content
 
         return buildJsonObject {
-            val _servers_5 = buildJsonArray {
+            put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
@@ -242,8 +236,7 @@ object XrayConfigParser {
                     put("password", JsonPrimitive(password))
                     if (plugin != null) put("plugin", JsonPrimitive(plugin))
                     if (pluginOpts != null) put("plugin_opts", JsonPrimitive(pluginOpts))
-                }
-            put("servers", _servers_5)
+                })
             })
         }
     }
@@ -254,20 +247,19 @@ object XrayConfigParser {
         val password = raw?.get("password")?.jsonPrimitive?.content
 
         return buildJsonObject {
-            val _servers_6 = buildJsonArray {
+            put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
                     if (username != null) {
-                        val _users_3 = buildJsonArray {
+                        put("users", buildJsonArray {
                             add(buildJsonObject {
                                 put("user", JsonPrimitive(username))
                                 if (password != null) put("pass", JsonPrimitive(password))
                             })
                         })
                     }
-                }
-            put("servers", _servers_6)
+                })
             })
         }
     }
@@ -278,20 +270,19 @@ object XrayConfigParser {
         val password = raw?.get("password")?.jsonPrimitive?.content
 
         return buildJsonObject {
-            val _servers_7 = buildJsonArray {
+            put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
                     if (username != null) {
-                        val _users_4 = buildJsonArray {
+                        put("users", buildJsonArray {
                             add(buildJsonObject {
                                 put("user", JsonPrimitive(username))
                                 if (password != null) put("pass", JsonPrimitive(password))
                             })
                         })
                     }
-                }
-            put("servers", _servers_7)
+                })
             })
         }
     }
@@ -393,9 +384,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("path", JsonPrimitive(path))
             if (host != null) {
-                val _headers_8 = buildJsonObject {
+                put("headers", buildJsonObject {
                     put("Host", JsonPrimitive(host))
-                put("headers", _headers_8)
                 })
             }
         }
@@ -419,9 +409,8 @@ object XrayConfigParser {
         return buildJsonObject {
             put("security", JsonPrimitive(security))
             put("key", JsonPrimitive(key))
-            val _header_9 = buildJsonObject {
+            put("header", buildJsonObject {
                 put("type", JsonPrimitive("none"))
-            put("header", _header_9)
             })
         }
     }
@@ -467,7 +456,7 @@ object XrayConfigParser {
      */
     private fun buildRouting(): JsonObject = buildJsonObject {
         put("domainStrategy", JsonPrimitive("AsIs"))
-        val _rules_10 = buildJsonArray {
+        put("rules", buildJsonArray {
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {
@@ -476,8 +465,7 @@ object XrayConfigParser {
                 }
                 put("inboundTag", _inboundTags)
                 put("outboundTag", JsonPrimitive("proxy"))
-            }
-        put("rules", _rules_10)
+            })
         })
     }
 
