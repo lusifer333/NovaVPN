@@ -1,7 +1,9 @@
 package com.novavpn.app.di
 
 import android.content.Context
+import com.novavpn.app.service.AndroidBinaryManager
 import com.novavpn.domain.model.EngineType
+import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.api.EngineManagerImpl
 import com.novavpn.engine.singbox.SingboxEngine
@@ -29,6 +31,12 @@ object AppModule {
         impl.register(EngineType.SingBox, singboxEngine)
         return impl
     }
+
+    @Provides
+    @Singleton
+    fun provideBinaryManager(
+        @ApplicationContext context: Context
+    ): BinaryManager = AndroidBinaryManager(context)
 
     @Provides
     @Singleton

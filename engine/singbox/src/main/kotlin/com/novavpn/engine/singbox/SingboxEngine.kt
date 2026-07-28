@@ -3,17 +3,23 @@ package com.novavpn.engine.singbox
 import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.EngineType
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.Engine
 import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineError
-import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,7 +48,9 @@ import kotlinx.coroutines.sync.withLock
  * @see SingboxConfigParser
  */
 @Singleton
-class SingboxEngine @Inject constructor() : Engine {
+class SingboxEngine @Inject constructor(
+    private val binaryManager: BinaryManager
+) : Engine {
 
     override val type: EngineType = EngineType.SingBox
 
@@ -71,6 +79,18 @@ class SingboxEngine @Inject constructor() : Engine {
 
     /** Serialises all process-affecting operations. */
     private val mutex = Mutex()
+
+    /** Coroutine scope for background tasks. */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Job that reads the engine's stdout/stderr. */
+    private var outputCollector: Job? = null
+
+    /** Job that waits for unexpected process death. */
+    private var deathWatcher: Job? = null
+
+    /** Recent log lines from the engine process. */
+    private val _logBuffer = java.util.LinkedList<String>()
 
     // ------------------------------------------------------------------
     // Engine lifecycle
@@ -103,27 +123,34 @@ class SingboxEngine @Inject constructor() : Engine {
             _state.value = EngineRuntimeState.Starting
 
             try {
-                // 1. Generate sing-box JSON config
-                val jsonConfig = SingboxConfigParser.toSingboxJson(config)
-                Timber.tag(TAG).d("Generated Sing-box config:\n%s", jsonConfig)
+                // 1. Ensure engine binary is available
+                val binaryPath = binaryManager.ensureEngine(EngineType.SingBox).getOrThrow()
+                Timber.tag(TAG).i("Binary path: %s", binaryPath)
 
-                // 2. Write to a temporary file
-                val tempFile = File.createTempFile("singbox_config_", ".json")
+                // 2. Generate sing-box JSON config
+                val jsonConfig = SingboxConfigParser.toSingboxJson(config)
+                Timber.tag(TAG).d("Generated Sing-box config:\\n%s", jsonConfig)
+
+                // 3. Write to engine directory
+                val engineDir = binaryManager.getEngineDirectory(EngineType.SingBox)
+                val tempFile = File(engineDir, "config.json")
                 tempFile.writeText(jsonConfig)
-                tempFile.deleteOnExit()
                 configFile = tempFile
                 Timber.tag(TAG).d("Config written to %s", tempFile.absolutePath)
 
-                // 3. Start the sing-box subprocess
+                // 4. Start the sing-box subprocess
                 val pb = ProcessBuilder(
-                    "sing-box", "run", "-c", tempFile.absolutePath
+                    binaryPath, "run", "-c", tempFile.absolutePath
                 )
                 pb.redirectErrorStream(true)
 
                 val sbProcess = pb.start()
                 process = sbProcess
 
-                // 4. Give the process a moment to stabilise
+                // 5. Start process output collector
+                startOutputCollector(sbProcess)
+
+                // 6. Give the process a moment to stabilise
                 val alive = sbProcess.waitFor(2, TimeUnit.SECONDS)
 
                 if (alive) {
@@ -213,6 +240,35 @@ class SingboxEngine @Inject constructor() : Engine {
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Continuously reads the subprocess stdout/stderr and forwards it to Timber.
+     */
+    private fun startOutputCollector(proc: Process) {
+        outputCollector = serviceScope.launch {
+            try {
+                proc.inputStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (isActive && reader.readLine().also { line = it } != null) {
+                        if (line != null) {
+                            Timber.tag(TAG).d("[engine] %s", line)
+                            _logBuffer.add(line!!)
+                        }
+                    }
+                }
+            } catch (_: IOException) { }
+        }
+
+        deathWatcher = serviceScope.launch {
+            try {
+                val exitCode = proc.waitFor()
+                if (_state.value == EngineRuntimeState.Running) {
+                    Timber.tag(TAG).w("Engine process died unexpectedly (code=%d)", exitCode)
+                    _state.value = EngineRuntimeState.Crashed
+                }
+            } catch (_: InterruptedException) { }
+        }
+    }
 
     /**
      * Gracefully terminate the sing-box subprocess.
