@@ -5,8 +5,8 @@ import com.novavpn.domain.model.Protocol
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Transport
 import org.junit.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 
 class ConfigValidatorTest {
 
