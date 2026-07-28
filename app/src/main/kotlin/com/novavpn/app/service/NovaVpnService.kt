@@ -47,7 +47,6 @@ class NovaVpnService : VpnService() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NovaConfig.NOTIFICATION_ID, createNotification("Starting…"))
-        connectUseCase.updateState(ConnectionState.Disconnected)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

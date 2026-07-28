@@ -1,5 +1,7 @@
 package com.novavpn.feature.home
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -10,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -26,6 +29,21 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+
+    val context = LocalContext.current
+
+    // VPN permission launcher
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            // Permission granted — retry connection
+            viewModel.retryConnect()
+        } else {
+            // Permission denied
+            viewModel.onVpnPermissionDenied()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -51,8 +69,11 @@ fun HomeScreen(
                 serverAddress = displayServer?.let { "${it.address}:${it.port}" } ?: "",
                 isLoading = state.isLoading,
                 onConnect = {
-                    if (state.currentServer != null) {
-                        // Already connected, reconnect with same server
+                    // Check VPN permission before connecting
+                    val intent = android.net.VpnService.prepare(context)
+                    if (intent != null) {
+                        vpnPermissionLauncher.launch(intent)
+                    } else if (state.currentServer != null) {
                         viewModel.connect(state.currentServer!!)
                     } else {
                         viewModel.connectToSelected()

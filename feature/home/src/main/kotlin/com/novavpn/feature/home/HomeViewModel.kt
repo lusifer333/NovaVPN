@@ -104,4 +104,16 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    /** Called after VPN permission is granted — retry the last connect. */
+    fun retryConnect() {
+        val server = _state.value.selectedServer
+        if (server != null) connect(server)
+    }
+
+    /** Called when VPN permission is denied by user. */
+    fun onVpnPermissionDenied() {
+        connectUseCase.updateState(ConnectionState.Error)
+        _state.update { it.copy(connectionState = ConnectionState.Error) }
+    }
 }
