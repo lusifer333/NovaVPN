@@ -134,7 +134,7 @@ class SingboxEngine @Inject constructor() : Engine {
                 if (alive) {
                     // Process is still running after the brief wait
                     _state.value = EngineRuntimeState.Running
-                    Timber.tag(TAG).i("Sing-box engine is RUNNING )
+                    Timber.tag(TAG).i("Sing-box engine is RUNNING")
                     Result.success(Unit)
                 } else {
                     // Process exited immediately — capture its stderr
@@ -227,7 +227,7 @@ class SingboxEngine @Inject constructor() : Engine {
         val proc = process ?: return
         if (!proc.isAlive) return
 
-        Timber.tag(TAG).d("Destroying Sing-box process )
+        Timber.tag(TAG).d("Destroying Sing-box process")
         proc.destroy() // SIGTERM
         try {
             val exited = proc.waitFor(3, TimeUnit.SECONDS)
