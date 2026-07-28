@@ -329,7 +329,8 @@ object SingboxConfigParser {
                     if (host != null) {
                         val _hostArr = buildJsonArray {
                             host.split(",").forEach { add(it.trim()) }
-                        })
+                        }
+                        put("host", _hostArr)
                     }
                 }
                 else -> { /* TCP — no transport object needed */ }
@@ -352,7 +353,8 @@ object SingboxConfigParser {
                 val _inbound = buildJsonArray {
                     add("socks-in")
                     add("http-in")
-                })
+                }
+                put("inbound", _inbound)
                 put("outbound", JsonPrimitive("proxy"))
             })
         })
