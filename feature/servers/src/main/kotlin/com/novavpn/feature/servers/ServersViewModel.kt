@@ -11,6 +11,7 @@ import com.novavpn.domain.usecase.connection.ObserveConnectionStateUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 data class ServersUiState(
@@ -35,6 +36,10 @@ class ServersViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             serverRepository.observeAll().collect { servers ->
+                Timber.tag("ServersVM").w("[DEBUG-servers] observeAll emitted: %d servers", servers.size)
+                servers.forEach { s ->
+                    Timber.tag("ServersVM").d("[DEBUG-servers] server: id=%s name=%s subId=%s", s.id.take(8), s.name, s.subscriptionId.take(8))
+                }
                 _state.update { it.copy(servers = servers) }
             }
         }
