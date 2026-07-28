@@ -99,6 +99,7 @@ enum class ConnectionState {
  */
 enum class EngineRuntimeState {
     Idle,
+    Preparing,
     Starting,
     Running,
     Stopping,

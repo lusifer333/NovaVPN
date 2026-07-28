@@ -4,6 +4,7 @@ import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.EngineType
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.engine.api.BinaryManager
+import com.novavpn.engine.api.ConfigValidator
 import com.novavpn.engine.api.Engine
 import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineError
@@ -120,10 +121,18 @@ class SingboxEngine @Inject constructor(
             Timber.tag(TAG).i("Starting Sing-box engine with config '%s' (%s:%d, protocol=%s)",
                 config.name, config.address, config.port, config.protocol)
 
-            _state.value = EngineRuntimeState.Starting
+            _state.value = EngineRuntimeState.Preparing
 
             try {
+                // 0. Validate config first
+                ConfigValidator.validate(config).getOrElse { error ->
+                    _state.value = EngineRuntimeState.Crashed
+                    Timber.tag(TAG).e("Config validation failed: %s", error.message)
+                    return@withLock Result.failure(error)
+                }
+
                 // 1. Ensure engine binary is available
+                _state.value = EngineRuntimeState.Starting
                 val binaryPath = binaryManager.ensureEngine(EngineType.SingBox).getOrThrow()
                 Timber.tag(TAG).i("Sing-box binary: %s (%d KB)", binaryPath,
                     java.io.File(binaryPath).length() / 1024)

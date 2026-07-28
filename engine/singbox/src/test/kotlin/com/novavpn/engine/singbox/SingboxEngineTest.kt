@@ -24,10 +24,16 @@ class SingboxEngineTest {
 
     private lateinit var engine: SingboxEngine
 
-    private val testConfig = ServerConfig(
+    private val validConfig = ServerConfig(
         id = "test-1", name = "Test Server", address = "1.2.3.4", port = 443,
         protocol = Protocol.VMess, transport = Transport.TCP,
         rawConfig = """{"id":"uuid-here","aid":0}"""
+    )
+
+    private val invalidConfig = ServerConfig(
+        id = "bad", name = "Bad Server", address = "", port = 0,
+        protocol = Protocol.Unknown, transport = Transport.Unknown,
+        rawConfig = ""
     )
 
     private val testContext = object : EngineContext {
@@ -62,16 +68,33 @@ class SingboxEngineTest {
     }
 
     @Test
-    fun `start fails gracefully without binary`() = runTest {
+    fun `start transitions to Crashed without binary`() = runTest {
         coEvery { binaryManager.ensureEngine(EngineType.SingBox) } returns Result.failure(
             Exception("Binary not found")
         )
 
-        val result = engine.start(testConfig)
+        val result = engine.start(validConfig)
 
         assertTrue(result.isFailure)
         assertEquals(EngineRuntimeState.Crashed, engine.state.value)
         coVerify { binaryManager.ensureEngine(EngineType.SingBox) }
+    }
+
+    @Test
+    fun `start with invalid config is rejected before binary lookup`() = runTest {
+        val result = engine.start(invalidConfig)
+
+        assertTrue("Invalid config should be rejected", result.isFailure)
+        assertEquals(EngineRuntimeState.Crashed, engine.state.value)
+        coVerify(inverse = true) { binaryManager.ensureEngine(any()) }
+    }
+
+    @Test
+    fun `start with empty address is rejected`() = runTest {
+        val bad = validConfig.copy(address = "")
+        val result = engine.start(bad)
+        assertTrue(result.isFailure)
+        assertEquals(EngineRuntimeState.Crashed, engine.state.value)
     }
 
     @Test

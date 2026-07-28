@@ -24,10 +24,16 @@ class XrayEngineTest {
 
     private lateinit var engine: XrayEngine
 
-    private val testConfig = ServerConfig(
+    private val validConfig = ServerConfig(
         id = "test-1", name = "Test Server", address = "1.2.3.4", port = 443,
         protocol = Protocol.VMess, transport = Transport.TCP,
         rawConfig = """{"id":"uuid-here","aid":0}"""
+    )
+
+    private val invalidConfig = ServerConfig(
+        id = "bad", name = "Bad Server", address = "", port = 0,
+        protocol = Protocol.Unknown, transport = Transport.Unknown,
+        rawConfig = ""
     )
 
     private val testContext = object : EngineContext {
@@ -62,16 +68,52 @@ class XrayEngineTest {
     }
 
     @Test
-    fun `start fails gracefully without binary`() = runTest {
+    fun `start transitions Idle to Preparing to Starting to Crashed without binary`() = runTest {
         coEvery { binaryManager.ensureEngine(EngineType.Xray) } returns Result.failure(
             Exception("Binary not found")
         )
 
-        val result = engine.start(testConfig)
+        val result = engine.start(validConfig)
 
         assertTrue(result.isFailure)
+        // State should be Crashed after failure
         assertEquals(EngineRuntimeState.Crashed, engine.state.value)
         coVerify { binaryManager.ensureEngine(EngineType.Xray) }
+    }
+
+    @Test
+    fun `start with invalid config is rejected in Preparing phase`() = runTest {
+        val result = engine.start(invalidConfig)
+
+        assertTrue("Invalid config should be rejected", result.isFailure)
+        assertEquals("State should be Crashed after invalid config",
+            EngineRuntimeState.Crashed, engine.state.value)
+        // BinaryManager should NOT be called — validation happens first
+        coVerify(inverse = true) { binaryManager.ensureEngine(any()) }
+    }
+
+    @Test
+    fun `start with empty address is rejected`() = runTest {
+        val bad = validConfig.copy(address = "")
+        val result = engine.start(bad)
+        assertTrue(result.isFailure)
+        assertEquals(EngineRuntimeState.Crashed, engine.state.value)
+    }
+
+    @Test
+    fun `start with invalid port is rejected`() = runTest {
+        val bad = validConfig.copy(port = 0)
+        val result = engine.start(bad)
+        assertTrue(result.isFailure)
+        assertEquals(EngineRuntimeState.Crashed, engine.state.value)
+    }
+
+    @Test
+    fun `start with Unknown protocol is rejected`() = runTest {
+        val bad = validConfig.copy(protocol = Protocol.Unknown)
+        val result = engine.start(bad)
+        assertTrue(result.isFailure)
+        assertEquals(EngineRuntimeState.Crashed, engine.state.value)
     }
 
     @Test
@@ -81,7 +123,7 @@ class XrayEngineTest {
     }
 
     @Test
-    fun `destroy cleans up`() = runTest {
+    fun `destroy cleans up and resets state`() = runTest {
         engine.initialize(testContext)
         engine.destroy()
         assertEquals(EngineRuntimeState.Idle, engine.state.value)
