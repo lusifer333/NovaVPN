@@ -255,5 +255,3 @@ class XrayEngine @Inject constructor() : Engine {
         private const val TAG = "XrayEngine"
     }
 }
-
-}

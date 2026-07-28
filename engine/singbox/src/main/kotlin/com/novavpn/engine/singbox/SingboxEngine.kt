@@ -254,5 +254,3 @@ class SingboxEngine @Inject constructor() : Engine {
         private const val TAG = "SingboxEngine"
     }
 }
-
-}
