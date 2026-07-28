@@ -3,11 +3,8 @@ package com.novavpn.subscription.importer
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.subscription.parser.SubscriptionParser
 import timber.log.Timber
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.nio.charset.Charset
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,29 +42,28 @@ class SubscriptionImporter @Inject constructor(
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("User-Agent", "NovaVPN/1.0")
             connection.setRequestProperty("Accept", "*/*")
+            connection.setRequestProperty("Cache-Control", "no-cache")
+            connection.setRequestProperty("Connection", "close")
 
             val responseCode = connection.responseCode
+            Timber.tag(TAG).d("importFromUrl: HTTP %d for %s", responseCode, url)
+
             if (responseCode !in 200..399) {
                 Timber.tag(TAG).w("importFromUrl: HTTP %d for %s", responseCode, url)
                 return emptyList()
             }
 
-            // Auto-detect encoding from Content-Type header, default to UTF-8
-            val contentType = connection.contentType ?: ""
-            val charsetName = extractCharset(contentType)
-            val charset = Charset.forName(charsetName)
-
-            Timber.tag(TAG).d(
-                "importFromUrl: HTTP %d, Content-Type=%s, charset=%s",
-                responseCode, contentType, charsetName
-            )
-
-            val reader = BufferedReader(InputStreamReader(connection.inputStream, charset))
-            val text = reader.readText()
-            reader.close()
+            // Read the full response
+            val inputStream = connection.inputStream ?: return emptyList()
+            val text = inputStream.bufferedReader().use { it.readText() }
             connection.disconnect()
 
             Timber.tag(TAG).d("importFromUrl: received %d chars", text.length)
+
+            if (text.isBlank()) {
+                Timber.tag(TAG).w("importFromUrl: empty response from %s", url)
+                return emptyList()
+            }
 
             val configs = parser.parse(text)
             Timber.tag(TAG).d("importFromUrl: parsed %d server configs", configs.size)

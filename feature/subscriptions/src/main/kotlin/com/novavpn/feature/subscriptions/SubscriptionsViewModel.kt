@@ -87,11 +87,18 @@ class SubscriptionsViewModel @Inject constructor(
     fun refresh(id: String) {
         viewModelScope.launch {
             _state.update { it.copy(refreshingIds = _state.value.refreshingIds + id) }
-            refreshSubscription(id)
+            val result = refreshSubscription(id)
+            result.onFailure { error ->
+                _state.update { it.copy(
+                    refreshingIds = it.refreshingIds - id,
+                    snackbarMessage = "Refresh failed: ${error.message ?: "unknown error"}"
+                )}
+                return@launch
+            }
             _state.update {
                 it.copy(
                     refreshingIds = it.refreshingIds - id,
-                    snackbarMessage = "Subscription updated"
+                    snackbarMessage = "Subscription updated (${result.getOrDefault(emptyList()).size} servers)"
                 )
             }
         }
