@@ -92,9 +92,6 @@ class GetBestServerUseCaseTest {
 
 class IsServerFromEnabledSubscriptionUseCaseTest {
 
-    @get:Rule
-    val mockkRule = MockKRule(this)
-
     @MockK
     private lateinit var repo: ServerRepository
 
@@ -102,6 +99,7 @@ class IsServerFromEnabledSubscriptionUseCaseTest {
 
     @Before
     fun setUp() {
+        MockKAnnotations.init(this, relaxed = true)
         useCase = IsServerFromEnabledSubscriptionUseCase(repo)
     }
 
@@ -126,9 +124,6 @@ class IsServerFromEnabledSubscriptionUseCaseTest {
 
 class ObserveSelectableServersUseCaseTest {
 
-    @get:Rule
-    val mockkRule = MockKRule(this)
-
     @MockK
     private lateinit var repo: ServerRepository
 
@@ -136,6 +131,7 @@ class ObserveSelectableServersUseCaseTest {
 
     @Before
     fun setUp() {
+        MockKAnnotations.init(this, relaxed = true)
         useCase = ObserveSelectableServersUseCase(repo)
     }
 
