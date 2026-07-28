@@ -29,6 +29,7 @@ class NovaVpnService : VpnService() {
 
     @Inject lateinit var engineManager: EngineManager
     @Inject lateinit var connectUseCase: ConnectUseCase
+    @Inject lateinit var serverRepository: com.novavpn.domain.repository.ServerRepository
 
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
@@ -38,7 +39,7 @@ class NovaVpnService : VpnService() {
     companion object {
         const val ACTION_START = "com.novavpn.action.START_VPN"
         const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
-        const val EXTRA_CONFIG = "extra_server_config"
+        const val EXTRA_CONFIG_ID = "extra_server_id"
         private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
     }
 
@@ -51,7 +52,13 @@ class NovaVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startVpn(intent.getParcelableExtra(EXTRA_CONFIG))
+            ACTION_START -> {
+                val serverId = intent.getStringExtra(EXTRA_CONFIG_ID)
+                serviceScope.launch {
+                    val config = serverId?.let { serverRepository.getById(it) }
+                    startVpn(config)
+                }
+            }
             ACTION_STOP -> stopVpn()
         }
         return START_STICKY

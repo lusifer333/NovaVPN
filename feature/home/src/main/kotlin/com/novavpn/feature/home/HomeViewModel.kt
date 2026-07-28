@@ -1,7 +1,10 @@
 package com.novavpn.feature.home
 
+import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.novavpn.app.service.NovaVpnService
 import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.ConnectionStats
 import com.novavpn.domain.model.ServerConfig
@@ -9,6 +12,7 @@ import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.domain.usecase.connection.ObserveConnectionStateUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,7 +30,8 @@ data class HomeUiState(
 class HomeViewModel @Inject constructor(
     private val connectUseCase: ConnectUseCase,
     private val observeConnectionState: ObserveConnectionStateUseCase,
-    private val serverRepository: ServerRepository
+    private val serverRepository: ServerRepository,
+    @ApplicationContext private val context: Application
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(HomeUiState())
@@ -52,7 +57,7 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Observe last connected server (reactively — updates on selection change)
+        // Observe last connected server reactively
         viewModelScope.launch {
             serverRepository.observeLastConnected().collect { server ->
                 _state.update { it.copy(selectedServer = server) }
@@ -64,7 +69,10 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             try {
-                connectUseCase.connect(server)
+                val accepted = connectUseCase.connect(server)
+                if (accepted) {
+                    startVpnService(server)
+                }
             } finally {
                 _state.update { it.copy(isLoading = false) }
             }
@@ -78,6 +86,7 @@ class HomeViewModel @Inject constructor(
 
     fun disconnect() {
         viewModelScope.launch {
+            startVpnStop()
             connectUseCase.disconnect()
         }
     }
@@ -88,11 +97,31 @@ class HomeViewModel @Inject constructor(
             try {
                 val best = _state.value.serverList.firstOrNull()
                 if (best != null) {
-                    connectUseCase.connect(best)
+                    val accepted = connectUseCase.connect(best)
+                    if (accepted) {
+                        startVpnService(best)
+                    }
                 }
             } finally {
                 _state.update { it.copy(isLoading = false) }
             }
         }
+    }
+
+    // ── Android VpnService helpers ────────────────────────────────────
+
+    private fun startVpnService(server: ServerConfig) {
+        val intent = Intent(context, NovaVpnService::class.java).apply {
+            action = NovaVpnService.ACTION_START
+            putExtra(NovaVpnService.EXTRA_CONFIG_ID, server.id)
+        }
+        context.startForegroundService(intent)
+    }
+
+    private fun startVpnStop() {
+        val intent = Intent(context, NovaVpnService::class.java).apply {
+            action = NovaVpnService.ACTION_STOP
+        }
+        context.startForegroundService(intent)
     }
 }

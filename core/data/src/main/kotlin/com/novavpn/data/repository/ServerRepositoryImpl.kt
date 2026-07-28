@@ -82,8 +82,8 @@ class ServerRepositoryImpl @Inject constructor(
     }
 
     override fun observeLastConnected(): Flow<ServerConfig?> {
-        return serverConfigDao.observeLastConnected().map { entity ->
-            entity?.toDomain()
+        return serverConfigDao.observeLastConnected().map { list ->
+            list.firstOrNull()?.toDomain()
         }
     }
 
