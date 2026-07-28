@@ -7,6 +7,7 @@ import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.storage.room.dao.ServerConfigDao
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,9 +39,19 @@ class ServerRepositoryImpl @Inject constructor(
         subscriptionId: String,
         servers: List<ServerConfig>
     ) {
+        Timber.tag("ServerRepo").d("replaceForSubscription: id=%s, %d servers", subscriptionId, servers.size)
+        // Delete old servers for this subscription
         serverConfigDao.deleteBySubscription(subscriptionId)
-        val entities = servers.map { it.toEntity() }
+        Timber.tag("ServerRepo").d("Deleted old servers for %s", subscriptionId)
+
+        // Insert new servers — must set subscriptionId on each entity
+        val entities = servers.map { server ->
+            server.copy(subscriptionId = subscriptionId).toEntity()
+        }
+        Timber.tag("ServerRepo").d("Inserting %d servers with subscriptionId=%s", entities.size, subscriptionId)
+
         serverConfigDao.insertAll(entities)
+        Timber.tag("ServerRepo").d("Insert complete")
     }
 
     override suspend fun deleteBySubscription(subscriptionId: String) {
