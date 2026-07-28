@@ -34,6 +34,7 @@ dependencies {
     implementation(project(":storage:room"))
     implementation(project(":storage:datastore"))
     implementation(project(":logging"))
+    implementation(project(":subscription"))
 
     implementation(libs.bundles.coroutines)
     implementation(libs.bundles.lifecycle)

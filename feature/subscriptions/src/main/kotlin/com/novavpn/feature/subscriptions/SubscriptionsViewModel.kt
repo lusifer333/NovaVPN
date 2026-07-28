@@ -2,7 +2,10 @@ package com.novavpn.feature.subscriptions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.novavpn.data.usecase.RefreshSubscriptionUseCase
 import com.novavpn.domain.model.Subscription
+import com.novavpn.domain.repository.ServerRepository
+import com.novavpn.domain.repository.StatisticsRepository
 import com.novavpn.domain.usecase.subscription.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -11,9 +14,11 @@ import javax.inject.Inject
 
 data class SubscriptionsUiState(
     val subscriptions: List<Subscription> = emptyList(),
+    val serverCounts: Map<String, Int> = emptyMap(),
     val showAddDialog: Boolean = false,
     val editSubscription: Subscription? = null,
-    val isLoading: Boolean = false
+    val refreshingIds: Set<String> = emptySet(),
+    val snackbarMessage: String? = null
 )
 
 @HiltViewModel
@@ -22,7 +27,9 @@ class SubscriptionsViewModel @Inject constructor(
     private val addSubscription: AddSubscriptionUseCase,
     private val deleteSubscription: DeleteSubscriptionUseCase,
     private val updateSubscription: UpdateSubscriptionUseCase,
-    private val toggleSubscription: ToggleSubscriptionUseCase
+    private val toggleSubscription: ToggleSubscriptionUseCase,
+    private val refreshSubscription: RefreshSubscriptionUseCase,
+    private val serverRepository: ServerRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SubscriptionsUiState())
@@ -31,7 +38,13 @@ class SubscriptionsViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             observeSubscriptions().collect { subs ->
-                _state.update { it.copy(subscriptions = subs) }
+                // Build server count map for each subscription
+                val counts = mutableMapOf<String, Int>()
+                for (sub in subs) {
+                    val servers = serverRepository.observeBySubscription(sub.id).firstOrNull()
+                    counts[sub.id] = servers?.size ?: 0
+                }
+                _state.update { it.copy(subscriptions = subs, serverCounts = counts) }
             }
         }
     }
@@ -53,8 +66,12 @@ class SubscriptionsViewModel @Inject constructor(
             val existing = _state.value.editSubscription
             if (existing != null) {
                 updateSubscription(existing.copy(name = name, url = url))
+                _state.update { it.copy(snackbarMessage = "Subscription updated") }
             } else {
-                addSubscription(name, url)
+                val id = addSubscription(name, url)
+                // Auto-fetch after adding
+                refreshSubscription(id)
+                _state.update { it.copy(snackbarMessage = "Subscription added") }
             }
             hideDialog()
         }
@@ -63,6 +80,20 @@ class SubscriptionsViewModel @Inject constructor(
     fun delete(id: String) {
         viewModelScope.launch {
             deleteSubscription(id)
+            _state.update { it.copy(snackbarMessage = "Subscription deleted") }
+        }
+    }
+
+    fun refresh(id: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(refreshingIds = _state.value.refreshingIds + id) }
+            refreshSubscription(id)
+            _state.update {
+                it.copy(
+                    refreshingIds = it.refreshingIds - id,
+                    snackbarMessage = "Subscription updated"
+                )
+            }
         }
     }
 
@@ -72,7 +103,7 @@ class SubscriptionsViewModel @Inject constructor(
         }
     }
 
-    fun copyUrl(subscription: Subscription) {
-        // Handled at UI layer with clipboard
+    fun clearSnackbar() {
+        _state.update { it.copy(snackbarMessage = null) }
     }
 }
