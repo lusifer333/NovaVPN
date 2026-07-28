@@ -16,6 +16,7 @@ import javax.inject.Inject
 data class HomeUiState(
     val connectionState: ConnectionState = ConnectionState.Disconnected,
     val currentServer: ServerConfig? = null,
+    val selectedServer: ServerConfig? = null,
     val serverList: List<ServerConfig> = emptyList(),
     val stats: ConnectionStats = ConnectionStats(),
     val isLoading: Boolean = false
@@ -35,14 +36,27 @@ class HomeViewModel @Inject constructor(
         // Observe connection state
         viewModelScope.launch {
             observeConnectionState().collect { connState ->
-                _state.update { it.copy(connectionState = connState) }
+                val currentServer = if (connState == ConnectionState.Connected) {
+                    connectUseCase.currentServerId?.let { id -> serverRepository.getById(id) }
+                } else null
+                _state.update {
+                    it.copy(connectionState = connState, currentServer = currentServer)
+                }
             }
         }
 
-        // Observe selectable servers (from enabled subscriptions only)
+        // Observe selectable servers
         viewModelScope.launch {
             serverRepository.observeSelectable().collect { servers ->
                 _state.update { it.copy(serverList = servers) }
+            }
+        }
+
+        // Load last selected server
+        viewModelScope.launch {
+            val lastServer = serverRepository.getLastConnected()
+            if (lastServer != null) {
+                _state.update { it.copy(selectedServer = lastServer) }
             }
         }
     }
@@ -56,6 +70,11 @@ class HomeViewModel @Inject constructor(
                 _state.update { it.copy(isLoading = false) }
             }
         }
+    }
+
+    fun connectToSelected() {
+        val server = _state.value.selectedServer ?: return
+        connect(server)
     }
 
     fun disconnect() {

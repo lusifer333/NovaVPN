@@ -42,19 +42,55 @@ fun HomeScreen(
             Spacer(Modifier.height(24.dp))
 
             // Connection status card
+            val displayServer = state.currentServer ?: state.selectedServer
             ConnectionCard(
                 state = state.connectionState,
-                serverName = state.currentServer?.name ?: "No server selected",
+                serverName = displayServer?.let {
+                    "${it.name} (${it.protocol.displayName})"
+                } ?: "No server selected",
+                serverAddress = displayServer?.let { "${it.address}:${it.port}" } ?: "",
                 isLoading = state.isLoading,
                 onConnect = {
-                    state.serverList.firstOrNull()?.let { server ->
-                        viewModel.connect(server)
-                    } ?: onNavigateToServers()
+                    if (state.currentServer != null) {
+                        // Already connected, reconnect with same server
+                        viewModel.connect(state.currentServer!!)
+                    } else {
+                        viewModel.connectToSelected()
+                    }
                 },
                 onDisconnect = { viewModel.disconnect() }
             )
 
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(16.dp))
+
+            // Selected server card
+            if (state.selectedServer != null && state.currentServer == null) {
+                OutlinedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Ready: ${state.selectedServer!!.name}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
 
             // Stats row
             Row(
@@ -140,6 +176,7 @@ fun HomeScreen(
 private fun ConnectionCard(
     state: ConnectionState,
     serverName: String,
+    serverAddress: String,
     isLoading: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
@@ -213,6 +250,15 @@ private fun ConnectionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+
+            if (serverAddress.isNotBlank() && !isConnected) {
+                Text(
+                    text = serverAddress,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 

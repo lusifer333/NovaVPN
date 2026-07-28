@@ -108,8 +108,8 @@ fun ServersScreen(
                     ) { server ->
                         ServerListItem(
                             server = server,
-                            isSelected = server.id == state.connectedServerId,
-                            onTap = { viewModel.connectTo(server) }
+                            isSelected = server.id == state.selectedServerId,
+                            onTap = { viewModel.selectServer(server) }
                         )
                     }
                 }
