@@ -25,6 +25,12 @@ class ServerRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeSelectable(): Flow<List<ServerConfig>> {
+        return serverConfigDao.observeSelectable().map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
     override fun observeBySubscription(subscriptionId: String): Flow<List<ServerConfig>> {
         return serverConfigDao.observeBySubscription(subscriptionId).map { entities ->
             entities.map { it.toDomain() }
@@ -35,17 +41,17 @@ class ServerRepositoryImpl @Inject constructor(
         return serverConfigDao.getById(id)?.toDomain()
     }
 
+    override suspend fun isServerFromEnabledSubscription(serverId: String): Boolean {
+        return serverConfigDao.isServerFromEnabledSubscription(serverId) > 0
+    }
+
     override suspend fun replaceForSubscription(
         subscriptionId: String,
         servers: List<ServerConfig>
     ) {
         Timber.tag("ServerRepo").d("replaceForSubscription: id=%s, %d servers", subscriptionId, servers.size)
 
-        // Delete old servers for this subscription
-        serverConfigDao.deleteBySubscription(subscriptionId)
-        Timber.tag("ServerRepo").d("Deleted old servers for %s", subscriptionId)
-
-        // Insert new servers — generate unique IDs and set subscriptionId on each entity
+        // Generate unique IDs and set subscriptionId on each entity
         val entities = servers.map { server ->
             val uniqueId = if (server.id.isBlank()) {
                 java.util.UUID.randomUUID().toString()
@@ -57,10 +63,10 @@ class ServerRepositoryImpl @Inject constructor(
                 subscriptionId = subscriptionId
             ).toEntity()
         }
-        Timber.tag("ServerRepo").d("Inserting %d servers with subscriptionId=%s", entities.size, subscriptionId)
 
-        serverConfigDao.insertAll(entities)
-        Timber.tag("ServerRepo").d("Insert complete")
+        // Atomic replace — wrapped in Room @Transaction
+        serverConfigDao.replaceForSubscription(subscriptionId, entities)
+        Timber.tag("ServerRepo").d("replaceForSubscription: inserted %d servers", entities.size)
     }
 
     override suspend fun deleteBySubscription(subscriptionId: String) {

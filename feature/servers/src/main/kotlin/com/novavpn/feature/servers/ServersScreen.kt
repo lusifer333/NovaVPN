@@ -24,6 +24,19 @@ fun ServersScreen(
     val state by viewModel.state.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
 
+    // Pre-compute filtered list — only recalculates when searchQuery or servers change
+    val filteredServers by remember {
+        derivedStateOf {
+            val query = state.searchQuery.trim().lowercase()
+            if (query.isBlank()) state.servers
+            else state.servers.filter {
+                it.name.lowercase().contains(query) ||
+                it.address.lowercase().contains(query) ||
+                it.protocol.displayName.lowercase().contains(query)
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             NovaTopBar(
@@ -58,9 +71,7 @@ fun ServersScreen(
                 )
             }
 
-            val servers = viewModel.filteredServers
-
-            if (servers.isEmpty()) {
+            if (filteredServers.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -76,8 +87,10 @@ fun ServersScreen(
                         Text(
                             text = if (state.searchQuery.isNotBlank())
                                 "No servers match your search"
+                            else if (state.servers.isEmpty())
+                                "No servers available\nAdd a subscription first"
                             else
-                                "No servers available\nAdd a subscription first",
+                                "All servers are hidden\n(enable subscriptions first)",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -90,7 +103,7 @@ fun ServersScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(
-                        items = servers,
+                        items = filteredServers,
                         key = { it.id }
                     ) { server ->
                         ServerListItem(

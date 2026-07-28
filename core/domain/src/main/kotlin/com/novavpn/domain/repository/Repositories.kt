@@ -39,11 +39,17 @@ interface ServerRepository {
     /** Observe all servers as a flow. */
     fun observeAll(): Flow<List<ServerConfig>>
 
+    /** Observe servers from enabled subscriptions only (selectable). */
+    fun observeSelectable(): Flow<List<ServerConfig>>
+
     /** Observe servers for a specific subscription. */
     fun observeBySubscription(subscriptionId: String): Flow<List<ServerConfig>>
 
     /** Get a single server by ID. */
     suspend fun getById(id: String): ServerConfig?
+
+    /** Check if a server belongs to an enabled subscription. */
+    suspend fun isServerFromEnabledSubscription(serverId: String): Boolean
 
     /** Replace all servers for a subscription (after parsing). */
     suspend fun replaceForSubscription(subscriptionId: String, servers: List<ServerConfig>)

@@ -9,7 +9,12 @@ import androidx.room.PrimaryKey
 /**
  * Room entity representing a VPN subscription source.
  */
-@Entity(tableName = "subscriptions")
+@Entity(
+    tableName = "subscriptions",
+    indices = [
+        Index(value = ["isEnabled"])
+    ]
+)
 data class SubscriptionEntity(
     @PrimaryKey val id: String,
     val name: String,

@@ -5,12 +5,19 @@ import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.StatisticsRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 
 class ObserveServersUseCase @Inject constructor(
     private val repo: ServerRepository
 ) {
     operator fun invoke(): Flow<List<ServerConfig>> = repo.observeAll()
+}
+
+class ObserveSelectableServersUseCase @Inject constructor(
+    private val repo: ServerRepository
+) {
+    operator fun invoke(): Flow<List<ServerConfig>> = repo.observeSelectable()
 }
 
 class ObserveServersBySubscriptionUseCase @Inject constructor(
@@ -46,11 +53,21 @@ class GetBestServerUseCase @Inject constructor(
 
         for (score in scores) {
             val server = serverRepo.getById(score.serverId) ?: continue
-            return server
+            // Only return servers from enabled subscriptions
+            if (serverRepo.isServerFromEnabledSubscription(server.id)) {
+                return server
+            }
         }
 
-        // Fallback: return any server
-        val servers = serverRepo.observeAll()
+        // Fallback: return any selectable server
+        val servers = serverRepo.observeSelectable()
         return servers.firstOrNull()?.firstOrNull()
     }
+}
+
+class IsServerFromEnabledSubscriptionUseCase @Inject constructor(
+    private val repo: ServerRepository
+) {
+    suspend operator fun invoke(serverId: String): Boolean =
+        repo.isServerFromEnabledSubscription(serverId)
 }

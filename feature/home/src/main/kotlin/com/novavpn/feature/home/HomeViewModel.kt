@@ -39,9 +39,9 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Observe servers
+        // Observe selectable servers (from enabled subscriptions only)
         viewModelScope.launch {
-            serverRepository.observeAll().collect { servers ->
+            serverRepository.observeSelectable().collect { servers ->
                 _state.update { it.copy(serverList = servers) }
             }
         }

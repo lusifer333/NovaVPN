@@ -33,8 +33,9 @@ class ServersViewModel @Inject constructor(
     val state: StateFlow<ServersUiState> = _state.asStateFlow()
 
     init {
+        // Observe selectable servers (from enabled subscriptions only)
         viewModelScope.launch {
-            serverRepository.observeAll().collect { servers ->
+            serverRepository.observeSelectable().collect { servers ->
                 _state.update { it.copy(servers = servers) }
             }
         }
@@ -67,15 +68,4 @@ class ServersViewModel @Inject constructor(
             serverRepository.setFavourite(serverId, isFavorite)
         }
     }
-
-    val filteredServers: List<ServerConfig>
-        get() {
-            val query = _state.value.searchQuery.trim().lowercase()
-            return if (query.isBlank()) _state.value.servers
-            else _state.value.servers.filter {
-                it.name.lowercase().contains(query) ||
-                it.address.lowercase().contains(query) ||
-                it.protocol.displayName.lowercase().contains(query)
-            }
-        }
 }

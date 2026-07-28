@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.novavpn.storage.room.entity.LogEntryEntity
 import com.novavpn.storage.room.entity.ServerConfigEntity
@@ -60,8 +61,36 @@ interface ServerConfigDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(servers: List<ServerConfigEntity>)
 
+    @Transaction
+    suspend fun replaceForSubscription(subscriptionId: String, servers: List<ServerConfigEntity>) {
+        deleteBySubscription(subscriptionId)
+        insertAll(servers)
+    }
+
     @Query("SELECT * FROM server_configs ORDER BY name ASC")
     fun observeAll(): Flow<List<ServerConfigEntity>>
+
+    @Query("""
+        SELECT sc.* FROM server_configs sc
+        INNER JOIN subscriptions s ON sc.subscriptionId = s.id
+        WHERE s.isEnabled = 1
+        ORDER BY sc.name ASC
+    """)
+    fun observeSelectable(): Flow<List<ServerConfigEntity>>
+
+    @Query("""
+        SELECT COUNT(*) FROM server_configs sc
+        INNER JOIN subscriptions s ON sc.subscriptionId = s.id
+        WHERE sc.id = :serverId AND s.isEnabled = 1
+    """)
+    suspend fun isServerFromEnabledSubscription(serverId: String): Int
+
+    @Query("""
+        SELECT s.isEnabled FROM server_configs sc
+        INNER JOIN subscriptions s ON sc.subscriptionId = s.id
+        WHERE sc.id = :serverId
+    """)
+    suspend fun getServerSubscriptionEnabled(serverId: String): Boolean?
 
     @Query("SELECT * FROM server_configs WHERE subscriptionId = :subscriptionId ORDER BY name ASC")
     fun observeBySubscription(subscriptionId: String): Flow<List<ServerConfigEntity>>
@@ -89,6 +118,9 @@ interface ServerConfigDao {
 
     @Query("DELETE FROM server_configs")
     suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM server_configs")
+    suspend fun count(): Int
 }
 
 // ─── Test Result ─────────────────────────────────────────────────────────────
