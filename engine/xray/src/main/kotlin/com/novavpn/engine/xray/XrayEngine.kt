@@ -252,7 +252,7 @@ class XrayEngine @Inject constructor(
         outputCollector = serviceScope.launch {
             try {
                 proc.inputStream.bufferedReader().use { reader ->
-                    var line: String?
+                    var line: String? = null
                     while (isActive && reader.readLine().also { line = it } != null) {
                         if (line != null) {
                             Timber.tag(TAG).d("[engine] %s", line)
