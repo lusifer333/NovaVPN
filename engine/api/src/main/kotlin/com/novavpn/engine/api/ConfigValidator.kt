@@ -96,7 +96,6 @@ object ConfigValidator {
         if (rawConfig.isBlank()) return false
         return try {
             val element = kotlinx.serialization.json.Json
-                { ignoreUnknownKeys = true; isLenient = true }
                 .parseToJsonElement(rawConfig)
             if (element is kotlinx.serialization.json.JsonObject) {
                 element.containsKey(field)
