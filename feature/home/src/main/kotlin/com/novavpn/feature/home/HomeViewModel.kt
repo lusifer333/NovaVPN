@@ -52,11 +52,10 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // Load last selected server
+        // Observe last connected server (reactively — updates on selection change)
         viewModelScope.launch {
-            val lastServer = serverRepository.getLastConnected()
-            if (lastServer != null) {
-                _state.update { it.copy(selectedServer = lastServer) }
+            serverRepository.observeLastConnected().collect { server ->
+                _state.update { it.copy(selectedServer = server) }
             }
         }
     }

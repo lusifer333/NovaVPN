@@ -63,6 +63,9 @@ interface ServerRepository {
     /** Get last connected server. */
     suspend fun getLastConnected(): ServerConfig?
 
+    /** Observe last connected server reactively (emits on every change). */
+    fun observeLastConnected(): Flow<ServerConfig?>
+
     /** Set last connected server. */
     suspend fun setLastConnected(serverId: String)
 }

@@ -113,6 +113,9 @@ interface ServerConfigDao {
     @Query("SELECT * FROM server_configs ORDER BY lastConnected DESC LIMIT 1")
     suspend fun getLastConnected(): ServerConfigEntity?
 
+    @Query("SELECT * FROM server_configs WHERE lastConnected > 0 ORDER BY lastConnected DESC LIMIT 1")
+    fun observeLastConnected(): Flow<ServerConfigEntity?>
+
     @Query("SELECT * FROM server_configs WHERE subscriptionId = :subscriptionId")
     suspend fun getAllBySubscription(subscriptionId: String): List<ServerConfigEntity>
 

@@ -81,6 +81,12 @@ class ServerRepositoryImpl @Inject constructor(
         return serverConfigDao.getLastConnected()?.toDomain()
     }
 
+    override fun observeLastConnected(): Flow<ServerConfig?> {
+        return serverConfigDao.observeLastConnected().map { entity ->
+            entity?.toDomain()
+        }
+    }
+
     override suspend fun setLastConnected(serverId: String) {
         serverConfigDao.setLastConnected(serverId, System.currentTimeMillis())
     }
