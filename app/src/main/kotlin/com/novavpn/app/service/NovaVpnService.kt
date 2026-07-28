@@ -10,6 +10,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.novavpn.app.MainActivity
+import com.novavpn.app.R
 import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.NovaConfig
@@ -57,14 +58,14 @@ class NovaVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        stopVpnInternal()
+        serviceScope.launch { stopVpnInternal() }
         serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onRevoke() {
         connectUseCase.updateState(ConnectionState.Error)
-        stopVpnInternal()
+        serviceScope.launch { stopVpnInternal() }
     }
 
     fun startVpn(config: ServerConfig?) {
