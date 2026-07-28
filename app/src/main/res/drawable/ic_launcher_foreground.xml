@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="14"
+        android:translateY="14">
+        <!-- Shield background -->
+        <path
+            android:fillColor="#1A73E8"
+            android:pathData="M40,4L8,16v16c0,13.25 7.63,25.53 20,30c12.37,-4.47 20,-16.75 20,-30V16L40,4z" />
+        <!-- VPN checkmark -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M32,48L22,38l3,-3l7,7l16,-16l3,3z" />
+    </group>
+</vector>
