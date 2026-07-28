@@ -349,7 +349,7 @@ object XrayConfigParser {
             put("fingerprint", JsonPrimitive(fingerprint))
             if (alpn != null) {
                 val _alpnArr = buildJsonArray {
-                    alpn.split(",").forEach { add(it.trim()) }
+                    alpn.split(",").forEach { add(JsonPrimitive(it.trim())) }
                 }
                 put("alpn", _alpnArr)
             }
@@ -424,7 +424,7 @@ object XrayConfigParser {
             put("path", JsonPrimitive(path))
             if (host != null) {
                 val _hostArr = buildJsonArray {
-                    host.split(",").forEach { add(it.trim()) }
+                    host.split(",").forEach { add(JsonPrimitive(it.trim())) }
                 }
                 put("host", _hostArr)
             }
@@ -460,8 +460,8 @@ object XrayConfigParser {
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {
-                    add("socks-in")
-                    add("http-in")
+                    add(JsonPrimitive("socks-in"))
+                    add(JsonPrimitive("http-in"))
                 }
                 put("inboundTag", _inboundTags)
                 put("outboundTag", JsonPrimitive("proxy"))

@@ -328,7 +328,7 @@ object SingboxConfigParser {
                     val host = raw?.get("host")?.jsonPrimitive?.content
                     if (host != null) {
                         val _hostArr = buildJsonArray {
-                            host.split(",").forEach { add(it.trim()) }
+                            host.split(",").forEach { add(JsonPrimitive(it.trim())) }
                         }
                         put("host", _hostArr)
                     }
@@ -351,8 +351,8 @@ object SingboxConfigParser {
         put("rules", buildJsonArray {
             add(buildJsonObject {
                 val _inbound = buildJsonArray {
-                    add("socks-in")
-                    add("http-in")
+                    add(JsonPrimitive("socks-in"))
+                    add(JsonPrimitive("http-in"))
                 }
                 put("inbound", _inbound)
                 put("outbound", JsonPrimitive("proxy"))
