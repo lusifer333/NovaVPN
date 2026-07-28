@@ -7,22 +7,18 @@ import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Security
 import com.novavpn.domain.model.Transport
 import com.novavpn.domain.repository.ServerRepository
+import io.mockk.MockKAnnotations
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.impl.annotations.MockK
-import io.mockk.junit4.MockKRule
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 
 class ConnectUseCaseTest {
-
-    @get:Rule
-    val mockkRule = MockKRule(this)
 
     @MockK
     private lateinit var serverRepo: ServerRepository
@@ -46,6 +42,7 @@ class ConnectUseCaseTest {
 
     @Before
     fun setUp() {
+        MockKAnnotations.init(this, relaxed = true)
         connectUseCase = ConnectUseCase(getBestServer, serverRepo)
     }
 
@@ -87,11 +84,11 @@ class ConnectUseCaseTest {
     }
 
     /**
-     * Core safety test: disconnecting a subscription while connected does NOT
+     * Core safety test: disabling a subscription while connected does NOT
      * crash or disconnect. The server remains tracked in currentServer.
      */
     @Test
-    fun `enable-disable toggle does not interrupt active connection`() = runTest {
+    fun `enable disable toggle does not interrupt active connection`() = runTest {
         // 1. Connect to server (enabled at time of connect)
         coEvery { serverRepo.isServerFromEnabledSubscription("srv-1") } returns true
         val connected = connectUseCase.connect(enabledServer)
@@ -110,14 +107,16 @@ class ConnectUseCaseTest {
 
 class ObserveConnectionStateUseCaseTest {
 
-    @get:Rule
-    val mockkRule = MockKRule(this)
-
     @MockK
     private lateinit var serverRepo: ServerRepository
 
     @MockK
     private lateinit var getBestServer: com.novavpn.domain.usecase.server.GetBestServerUseCase
+
+    @Before
+    fun setUp() {
+        MockKAnnotations.init(this, relaxed = true)
+    }
 
     @Test
     fun `observeConnectionState emits state changes`() = runTest {

@@ -11,7 +11,7 @@ import com.novavpn.domain.repository.StatisticsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.impl.annotations.MockK
-import io.mockk.junit4.MockKRule
+import io.mockk.MockKAnnotations
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -19,13 +19,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 
 class GetBestServerUseCaseTest {
-
-    @get:Rule
-    val mockkRule = MockKRule(this)
 
     @MockK
     private lateinit var serverRepo: ServerRepository
@@ -49,6 +45,7 @@ class GetBestServerUseCaseTest {
 
     @Before
     fun setUp() {
+        MockKAnnotations.init(this, relaxed = true)
         useCase = GetBestServerUseCase(serverRepo, statsRepo)
     }
 
