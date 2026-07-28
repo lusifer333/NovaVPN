@@ -126,7 +126,7 @@ class ServerRepositoryTest {
     // ── isServerFromEnabledSubscription ───────────────────────────────────────
 
     @Test
-    fun `isServerFromEnabledSubscription returns true when DAO count > 0`() = runTest {
+    fun `isServerFromEnabledSubscription returns true when DAO count positive`() = runTest {
         val serverId = "srv-1"
         coEvery { dao.isServerFromEnabledSubscription(serverId) } returns 1
 
