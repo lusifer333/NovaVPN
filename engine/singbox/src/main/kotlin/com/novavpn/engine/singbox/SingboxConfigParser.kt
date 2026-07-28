@@ -247,12 +247,14 @@ object SingboxConfigParser {
 
         when (config.security) {
             Security.TLS -> {
-                put("tls", buildJsonObject {
+                val _tls_1 = buildJsonObject {
                     put("enabled", JsonPrimitive(true))
+                put("tls", _tls_1)
                     put("server_name", JsonPrimitive(serverName))
                     put("insecure", JsonPrimitive(false))
-                    put("utls", buildJsonObject {
+                    val _utls_2 = buildJsonObject {
                         put("enabled", JsonPrimitive(true))
+                    put("utls", _utls_2)
                         val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
                         put("fingerprint", JsonPrimitive(fingerprint))
                     })
@@ -263,16 +265,19 @@ object SingboxConfigParser {
                 val shortId = raw?.get("shortId")?.jsonPrimitive?.content ?: ""
                 val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
 
-                put("tls", buildJsonObject {
+                val _tls_3 = buildJsonObject {
                     put("enabled", JsonPrimitive(true))
+                put("tls", _tls_3)
                     put("server_name", JsonPrimitive(serverName))
                     put("insecure", JsonPrimitive(false))
-                    put("utls", buildJsonObject {
+                    val _utls_4 = buildJsonObject {
                         put("enabled", JsonPrimitive(true))
+                    put("utls", _utls_4)
                         put("fingerprint", JsonPrimitive(fingerprint))
                     })
-                    put("reality", buildJsonObject {
+                    val _reality_5 = buildJsonObject {
                         put("enabled", JsonPrimitive(true))
+                    put("reality", _reality_5)
                         put("public_key", JsonPrimitive(publicKey))
                         put("short_id", JsonPrimitive(shortId))
                     })
@@ -295,7 +300,7 @@ object SingboxConfigParser {
 
         val raw = parseRawConfig(config.rawConfig)
 
-        put("transport", buildJsonObject {
+        val _transport_6 = buildJsonObject {
             when (config.transport) {
                 Transport.WebSocket -> {
                     put("type", JsonPrimitive("ws"))
@@ -304,7 +309,7 @@ object SingboxConfigParser {
                     val host = raw?.get("host")?.jsonPrimitive?.content
                         ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.content
                     if (host != null) {
-                        put("headers", buildJsonObject {
+                        val _headers = buildJsonObject {
                             put("Host", JsonPrimitive(host))
                         })
                     }
@@ -327,13 +332,15 @@ object SingboxConfigParser {
                     put("path", JsonPrimitive(path))
                     val host = raw?.get("host")?.jsonPrimitive?.content
                     if (host != null) {
-                        put("host", buildJsonArray {
+                        val _hostArr = buildJsonArray {
                             host.split(",").forEach { add(it.trim()) }
-                        })
+                        }
+                        put("host", _hostArr)
                     }
                 }
                 else -> { /* TCP — no transport object needed */ }
             }
+        put("transport", _transport_6)
         })
     }
 
@@ -347,14 +354,16 @@ object SingboxConfigParser {
      * (first) outbound, which is "proxy".
      */
     private fun buildRoute(): JsonObject = buildJsonObject {
-        put("rules", buildJsonArray {
+        val _rules_7 = buildJsonArray {
             add(buildJsonObject {
-                put("inbound", buildJsonArray {
+                val _inbound = buildJsonArray {
                     add("socks-in")
                     add("http-in")
-                })
+                }
+                put("inbound", _inbound)
                 put("outbound", JsonPrimitive("proxy"))
-            })
+            }
+        put("rules", _rules_7)
         })
     }
 
