@@ -35,6 +35,7 @@ dependencies {
     implementation(project(":storage:datastore"))
     implementation(project(":logging"))
     implementation(project(":subscription"))
+    implementation(libs.timber)
 
     implementation(libs.bundles.coroutines)
     implementation(libs.bundles.lifecycle)
