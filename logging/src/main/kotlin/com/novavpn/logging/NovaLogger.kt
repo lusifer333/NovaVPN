@@ -5,7 +5,6 @@ import com.novavpn.domain.model.LogLevel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import timber.log.Timber
 import java.util.LinkedList
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,25 +12,27 @@ import javax.inject.Singleton
 /**
  * Centralised logging service for NovaVPN.
  *
- * Internally delegates to [Timber] for platform output, maintains an in-memory
- * circular buffer (max [BUFFER_CAPACITY] entries), and emits every entry to a
- * [SharedFlow] so that the UI layer can observe logs in real time.
+ * **IMPORTANT**: This class is the FINAL storage layer. It must NEVER call
+ * Timber — doing so creates an infinite loop:
+ *   Timber → NovaLoggerTree → NovaLogger → Timber → NovaLoggerTree → ...
+ *
+ * NovaLogger only:
+ * 1. Builds a [LogEntry]
+ * 2. Appends to the circular buffer
+ * 3. Emits to the SharedFlow for the UI layer
+ *
+ * logcat output is handled separately by Timber.DebugTree (planted in
+ * NovaApplication). NovaLoggerTree forwards Timber calls here — do NOT
+ * call Timber back from this class.
  */
 @Singleton
 class NovaLogger @Inject constructor() {
 
     companion object {
-        /** Default tag used when none is explicitly supplied. */
         const val NOVA_TAG = "NovaVPN"
-
-        /** Maximum number of entries kept in the circular buffer. */
         private const val BUFFER_CAPACITY = 1000
     }
 
-    // Thread-safe buffer: all mutations happen on the coroutine dispatcher
-    // that calls into the public methods. For a production app consider an
-    // actual locking mechanism; the circular buffer here is simple and
-    // sufficient for single-threaded or co-operative access.
     private val buffer = CircularBuffer<LogEntry>(BUFFER_CAPACITY)
 
     private val _logFlow = MutableSharedFlow<LogEntry>(
@@ -39,48 +40,35 @@ class NovaLogger @Inject constructor() {
         extraBufferCapacity = 64
     )
 
-    /** Hot stream of all log entries, observable from the UI layer. */
     val logFlow: SharedFlow<LogEntry> = _logFlow.asSharedFlow()
 
     // ------------------------------------------------------------------
-    // Tagged methods
+    // Tagged methods — stores to buffer + emits to flow ONLY
+    // NO Timber calls here (prevents StackOverflow recursion)
     // ------------------------------------------------------------------
 
     fun d(tag: String, message: String) {
-        val entry = buildEntry(LogLevel.Debug, tag, message)
-        Timber.tag(tag).d(message)
-        append(entry)
+        append(buildEntry(LogLevel.Debug, tag, message))
     }
 
     fun i(tag: String, message: String) {
-        val entry = buildEntry(LogLevel.Info, tag, message)
-        Timber.tag(tag).i(message)
-        append(entry)
+        append(buildEntry(LogLevel.Info, tag, message))
     }
 
     fun w(tag: String, message: String) {
-        val entry = buildEntry(LogLevel.Warning, tag, message)
-        Timber.tag(tag).w(message)
-        append(entry)
+        append(buildEntry(LogLevel.Warning, tag, message))
     }
 
     fun e(tag: String, message: String) {
-        val entry = buildEntry(LogLevel.Error, tag, message)
-        Timber.tag(tag).e(message)
-        append(entry)
+        append(buildEntry(LogLevel.Error, tag, message))
     }
 
     /**
      * Generic log method for use by [NovaLoggerTree].
-     * Maps Android log priority to [LogLevel] and forwards to the buffer.
+     * Maps [LogLevel] and forwards to the appropriate method.
      */
     fun log(level: LogLevel, tag: String, message: String) {
-        when (level) {
-            LogLevel.Debug -> d(tag, message)
-            LogLevel.Info -> i(tag, message)
-            LogLevel.Warning -> w(tag, message)
-            LogLevel.Error -> e(tag, message)
-        }
+        append(buildEntry(level, tag, message))
     }
 
     // ------------------------------------------------------------------
@@ -96,12 +84,6 @@ class NovaLogger @Inject constructor() {
     // Export / query
     // ------------------------------------------------------------------
 
-    /**
-     * Return all buffered log entries as a single newline-separated string,
-     * optionally filtered by [level].
-     *
-     * Format per line: `[LEVEL] tag: message`
-     */
     fun exportAsText(level: LogLevel?): String {
         val snapshot = buffer.toList()
         return snapshot
@@ -111,9 +93,6 @@ class NovaLogger @Inject constructor() {
             }
     }
 
-    /**
-     * Return the most recent [count] log entries from the buffer.
-     */
     fun getRecent(count: Int): List<LogEntry> {
         val snapshot = buffer.toList()
         return snapshot.takeLast(count.coerceAtLeast(0))
@@ -135,15 +114,13 @@ class NovaLogger @Inject constructor() {
 
     private fun append(entry: LogEntry) {
         buffer.add(entry)
-        // Offer to flow; if the buffer is full the emission is silently dropped.
         _logFlow.tryEmit(entry)
     }
 }
 
 /**
  * A fixed-size circular (ring) buffer backed by [LinkedList].
- * When the buffer reaches [capacity], the oldest element is evicted
- * before adding a new one.
+ * When the buffer reaches [capacity], the oldest element is evicted.
  */
 internal class CircularBuffer<T>(private val capacity: Int) {
 
