@@ -67,10 +67,15 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            - **Fixed:** Servers screen not showing parsed subscription servers
-              - Root cause: `SubscriptionParser` never set `ServerConfig.id`, causing all
-                servers to have `id=""` → Room PK collision → only last server survived.
-              - Fix: Generate unique UUID for each server before database insert.
+            - **Fixed:** Engine binary not found at runtime
+              - Root cause: AGP default `extractNativeLibs=false` prevented jniLibs
+                `.so` files from being extracted to `nativeLibraryDir` at install time
+              - Fix: Added `android:extractNativeLibs="true"` to AndroidManifest.xml
+            - **Added:** APK-zip direct extraction as last-resort binary fallback
+              - Reads `lib/<abi>/lib<engine>.so` directly from installed APK zip
+              - Works regardless of `extractNativeLibs` setting
+            - **Reduced:** APK size from 85MB to ~30MB
+              - Removed sing-box binary (52MB), kept only Xray-core (33MB)
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
