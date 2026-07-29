@@ -1,0 +1,31 @@
+package com.novavpn.domain.model
+
+/**
+ * Persistent TUN diagnostic state, stored outside the log buffer.
+ * Written by [XrayEngine] during engine start, read by [NovaVpnService]
+ * for the periodic DIAG log. This ensures TUN status is always visible
+ * even if the log buffer overflows with Xray debug output.
+ */
+object TunDiagnostics {
+    @Volatile
+    var rawFd: Int = -1
+    @Volatile
+    var inheritableFd: Int = -1
+    @Volatile
+    var dupOK: Boolean = false
+    @Volatile
+    var inboundType: String = "unknown"
+    @Volatile
+    var numInbounds: Int = 0
+    @Volatile
+    var processArgs: String = ""
+
+    fun reset() {
+        rawFd = -1
+        inheritableFd = -1
+        dupOK = false
+        inboundType = "unknown"
+        numInbounds = 0
+        processArgs = ""
+    }
+}

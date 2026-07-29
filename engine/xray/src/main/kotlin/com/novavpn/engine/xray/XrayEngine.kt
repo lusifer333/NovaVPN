@@ -184,6 +184,12 @@ class XrayEngine @Inject constructor(
                 // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
                 inheritableTunFd = createInheritableTunFd(rawTunFd)
                 val dupFailed = inheritableTunFd == rawTunFd
+
+                // Store TUN diagnostic state outside log buffer
+                com.novavpn.domain.model.TunDiagnostics.rawFd = rawTunFd
+                com.novavpn.domain.model.TunDiagnostics.inheritableFd = inheritableTunFd
+                com.novavpn.domain.model.TunDiagnostics.dupOK = !dupFailed
+
                 Timber.tag(TAG).i("TUN_FD_PASS: rawFd=%d, inheritableFd=%d, dupOK=%s",
                     rawTunFd, inheritableTunFd, !dupFailed)
 
@@ -260,6 +266,8 @@ class XrayEngine @Inject constructor(
 
                 Timber.tag(TAG).i("XRAY_PROCESS_ARGS: %s run -c %s",
                     binaryPath, tempFile.absolutePath)
+                com.novavpn.domain.model.TunDiagnostics.processArgs =
+                    "$binaryPath run -c ${tempFile.absolutePath}"
 
                 // Verify inheritable fd is valid before spawning child
                 val fdPath = "/proc/self/fd/$inheritableTunFd"

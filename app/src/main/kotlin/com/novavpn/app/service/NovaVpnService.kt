@@ -189,8 +189,14 @@ class NovaVpnService : VpnService() {
                     } catch (_: Exception) { false }
                 } else false
 
-                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s",
-                    counter, fd, tunFdValid, engineState)
+                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
+                    "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d",
+                    counter, fd, tunFdValid, engineState,
+                    com.novavpn.domain.model.TunDiagnostics.rawFd,
+                    com.novavpn.domain.model.TunDiagnostics.inheritableFd,
+                    com.novavpn.domain.model.TunDiagnostics.dupOK,
+                    com.novavpn.domain.model.TunDiagnostics.inboundType,
+                    com.novavpn.domain.model.TunDiagnostics.numInbounds)
             }
         }
 
@@ -216,6 +222,7 @@ class NovaVpnService : VpnService() {
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
+        com.novavpn.domain.model.TunDiagnostics.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectUseCase.updateState(ConnectionState.Disconnected)
         stopSelf()

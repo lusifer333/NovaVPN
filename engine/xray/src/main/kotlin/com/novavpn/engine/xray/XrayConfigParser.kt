@@ -73,6 +73,9 @@ object XrayConfigParser {
         val inboundFd = tunInbound?.get("settings")?.jsonObject?.get("fd")?.jsonPrimitive?.content ?: "?"
         Timber.tag(TAG).i("INBOUND_TYPE=%s, fd=%s, numInbounds=%d",
             inboundProto, inboundFd, inbounds?.size ?: 0)
+        // Store in persistent TUN diagnostics
+        com.novavpn.domain.model.TunDiagnostics.inboundType = inboundProto
+        com.novavpn.domain.model.TunDiagnostics.numInbounds = inbounds?.size ?: 0
         return jsonStr
     }
 
