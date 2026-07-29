@@ -3,6 +3,7 @@ package com.novavpn.engine.xray
 import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.EngineType
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.model.TunDiagnostics
 import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.ConfigValidator
 import com.novavpn.engine.api.Engine
@@ -330,20 +331,17 @@ class XrayEngine @Inject constructor(
                 processStillAlive = xrayProcess.isAlive
 
                 // Store PID and alive state
-                val xrayPid = try {
-                    java.lang.reflect.Method::class.java
-                        .getDeclaredMethod("pid")
-                    null // won't work on Android
-                } catch (_: Exception) { null }
-                val pidField = try {
-                    xrayProcess.javaClass.getDeclaredField("pid")
-                    pidField.isAccessible = true
-                    pidField.getInt(xrayProcess)
-                } catch (_: Exception) { -1 }
+                val xrayPid = -1 // Process.pid() not available on Android
+                try {
+                    val pidF = xrayProcess.javaClass.getDeclaredField("pid")
+                    pidF.isAccessible = true
+                    val pidVal = pidF.getInt(xrayProcess)
+                    TunDiagnostics.storePid(pidVal)
+                } catch (_: Exception) { }
 
                 TunDiagnostics.processArgs = "$binaryPath run -c ${tempFile.absolutePath}"
-                Timber.tag(TAG).i("XRAY_LIFECYCLE: alive=%s, pid=%d, initMs=%d, errorsInLog=%s",
-                    processStillAlive, pidField,
+                Timber.tag(TAG).i("XRAY_LIFECYCLE: alive=%s, initMs=%d, errorsInLog=%s",
+                    processStillAlive,
                     System.currentTimeMillis() - startTime,
                     lastOutput.contains("permission denied"))
 

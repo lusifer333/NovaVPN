@@ -19,6 +19,10 @@ object TunDiagnostics {
     var numInbounds: Int = 0
     @Volatile
     var processArgs: String = ""
+    @Volatile
+    var xrayPid: Int = -1
+
+    fun storePid(pid: Int) { xrayPid = pid }
 
     fun reset() {
         rawFd = -1
@@ -27,5 +31,6 @@ object TunDiagnostics {
         inboundType = "unknown"
         numInbounds = 0
         processArgs = ""
+        xrayPid = -1
     }
 }
