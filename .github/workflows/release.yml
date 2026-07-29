@@ -67,10 +67,12 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            - **Fixed:** UI overflow — HomeScreen now scrollable, stats visible after connect
-            - **Fixed:** No VPN traffic — TUN fd is now dup'd (Os.dup) to clear FD_CLOEXEC
-              so the Xray child process inherits the TUN file descriptor
-            - **Added:** Detailed logging for TUN setup, fd inheritance, and engine output
+            - **Fixed:** All protocol parsers now store structured JSON in rawConfig
+              (VLESS, VMess, Trojan, Shadowsocks) instead of raw URLs
+            - **Fixed:** UI overflow — HomeScreen scrollable, stats visible after connect
+            - **Fixed:** TUN fd now properly inheritable (Os.dup) for Xray child process
+            - **Added:** Legacy URL fallbacks in all Xray config builders
+            - **Added:** Detailed logging for TUN setup, fd inheritance, engine output
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
