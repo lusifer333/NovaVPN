@@ -200,7 +200,7 @@ class XrayEngine @Inject constructor(
                 tempFile.writeText(jsonConfig)
                 configFile = tempFile
                 Timber.tag(TAG).i("CONFIG WRITTEN: path=%s, size=%d bytes",
-                    tempFile.absolutePath, jsonConfig.length())
+                    tempFile.absolutePath, jsonConfig.length)
                 // Dump first 300 chars of config for debugging
                 Timber.tag(TAG).i("CONFIG DUMP: %s", jsonConfig.take(500))
 
