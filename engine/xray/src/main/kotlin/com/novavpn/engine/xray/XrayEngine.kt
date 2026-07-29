@@ -288,8 +288,8 @@ class XrayEngine @Inject constructor(
                 if (alive) {
                     // Process is still running after the brief wait
                     _state.value = EngineRuntimeState.Running
-                    Timber.tag(TAG).i("XRAY_READY: pid=%d, rawFd=%d, inheritFd=%d, dupOK=%s",
-                        xrayProcess.pid(), rawTunFd, inheritableTunFd,
+                    Timber.tag(TAG).i("XRAY_READY: rawFd=%d, inheritFd=%d, dupOK=%s",
+                        rawTunFd, inheritableTunFd,
                         rawTunFd != inheritableTunFd)
                     Result.success(Unit)
                 } else {
