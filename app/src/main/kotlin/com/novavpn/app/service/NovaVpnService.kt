@@ -272,7 +272,9 @@ class NovaVpnService : VpnService() {
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_STOP")
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STOP")
-        try { tunnelBridge.stop() } catch (_: Exception) { }
+        try { tunnelBridge.stop() } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "BRIDGE_STOP_EXCEPTION: %s", e.message)
+        }
         Timber.tag(TAG).i("LIFECYCLE: TUN_CLOSE")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
