@@ -201,12 +201,23 @@ class NovaVpnService : VpnService() {
             addRoute("0.0.0.0", 0); setBlocking(true)
         }.establish().also { tun ->
             if (tun != null) {
-                Timber.tag(TAG).i("TUN BUILT: fd=%d, mtu=1500, addr=10.0.0.2/32, " +
-                    "dns=[8.8.8.8,1.1.1.1], routes=[0.0.0.0/0], blocking=true",
-                    tun.fd)
+                // Validate the TUN fd is usable
+                val fd = tun.fd
+                val fdValid = fd >= 0
+                val fileDesc = tun.fileDescriptor
+                Timber.tag(TAG).i("TUN BUILT: fd=%d, fdValid=%s, fileDesc=%s, mtu=1500, " +
+                    "addr=10.0.0.2/32, dns=[8.8.8.8,1.1.1.1], routes=[0.0.0.0/0], " +
+                    "blocking=true, session=%s",
+                    fd, fdValid, if (fileDesc != null) "valid" else "null",
+                    NovaConfig.VPN_SESSION_NAME)
+            } else {
+                Timber.tag(TAG).e("TUN establish() returned null!")
             }
         }
-    } catch (e: Exception) { Timber.e(e, "TUN failed"); null }
+    } catch (e: Exception) {
+        Timber.tag(TAG).e(e, "TUN establish() threw exception")
+        null
+    }
 
     private fun createNotificationChannel() {
         val m = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

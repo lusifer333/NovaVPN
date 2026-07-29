@@ -73,7 +73,7 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     private fun buildLogSection(): JsonObject = buildJsonObject {
-        put("loglevel", JsonPrimitive("warning"))
+        put("loglevel", JsonPrimitive("debug"))
         put("access", JsonPrimitive("/dev/null"))
         put("error", JsonPrimitive("/dev/null"))
     }
@@ -83,14 +83,17 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
-     * TUN inbound that the Android VpnService feeds packets into.
-     * Uses the pre-existing TUN fd from VpnService.Builder.establish().
+     * TUN inbound (primary) + SOCKS/HTTP inbounds (fallback for testing).
      *
-     * In Xray 1.8.0+, the `tun` protocol accepts a pre-opened fd via the
-     * `fd` setting. The process must inherit this fd (use Os.dup() to
-     * clear FD_CLOEXEC before spawning the child).
+     * TUN inbound uses the pre-existing TUN fd from VpnService.Builder.establish().
+     * In Xray 1.8.0+, the `tun` protocol accepts a pre-opened fd via the `fd`
+     * setting. The process must inherit this fd (clear FD_CLOEXEC).
+     *
+     * SOCKS5 and HTTP inbounds are kept for debugging: if TUN doesn't work,
+     * users can test with a local proxy client at 127.0.0.1:10808/10809.
      */
     private fun buildInbounds(tunFd: Int): JsonArray = buildJsonArray {
+        // Primary: TUN inbound for VPN traffic
         add(buildJsonObject {
             put("protocol", JsonPrimitive("tun"))
             put("tag", JsonPrimitive("tun-in"))
@@ -106,6 +109,25 @@ object XrayConfigParser {
                     add(JsonPrimitive("tls"))
                 })
             })
+        })
+        // Fallback: SOCKS5 for local proxy testing
+        add(buildJsonObject {
+            put("listen", JsonPrimitive("127.0.0.1"))
+            put("port", 10808)
+            put("protocol", JsonPrimitive("socks"))
+            put("settings", buildJsonObject {
+                put("auth", JsonPrimitive("noauth"))
+                put("udp", JsonPrimitive(true))
+            })
+            put("tag", JsonPrimitive("socks-in"))
+        })
+        // Fallback: HTTP proxy
+        add(buildJsonObject {
+            put("listen", JsonPrimitive("127.0.0.1"))
+            put("port", 10809)
+            put("protocol", JsonPrimitive("http"))
+            put("settings", buildJsonObject { })
+            put("tag", JsonPrimitive("http-in"))
         })
     }
 
@@ -559,8 +581,8 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
-     * Routing: all traffic arriving on the TUN inbound gets sent to the
-     * proxy outbound. All other traffic bypasses the proxy (direct).
+     * Routing: traffic from TUN inbound gets sent to the proxy outbound.
+     * SOCKS/HTTP inbounds (fallback) also route to proxy for testing.
      */
     private fun buildRouting(): JsonObject = buildJsonObject {
         put("domainStrategy", JsonPrimitive("AsIs"))
@@ -569,6 +591,8 @@ object XrayConfigParser {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {
                     add(JsonPrimitive("tun-in"))
+                    add(JsonPrimitive("socks-in"))
+                    add(JsonPrimitive("http-in"))
                 }
                 put("inboundTag", _inboundTags)
                 put("outboundTag", JsonPrimitive("proxy"))

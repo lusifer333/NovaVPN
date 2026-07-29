@@ -149,6 +149,7 @@ class XrayConfigParserTest {
             (0 until tags.size).map { tags[it]!!.jsonPrimitive.content }
         }
         assertTrue("tun-in inbound tag must exist", tunInboundTags.contains("tun-in"))
+        assertTrue("socks-in inbound tag must exist", tunInboundTags.contains("socks-in"))
     }
 
     // ------------------------------------------------------------------

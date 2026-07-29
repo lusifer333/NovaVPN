@@ -179,7 +179,11 @@ class XrayEngine @Inject constructor(
                 // FD_CLOEXEC set, so the fd is closed in the child after fork/exec.
                 // Os.dup() creates a new fd that inherits across exec().
                 inheritableTunFd = createInheritableTunFd(rawTunFd)
-                Timber.tag(TAG).i("TUN fd: raw=%d, inheritable=%d", rawTunFd, inheritableTunFd)
+                Timber.tag(TAG).i("TUN FD STATE: rawFd=%d, inheritableFd=%d, " +
+                    "same=%s, inheritable>=0=%s",
+                    rawTunFd, inheritableTunFd,
+                    rawTunFd == inheritableTunFd,
+                    inheritableTunFd >= 0)
 
                 Timber.tag(TAG).i("Generating config with TUN fd=%d, dns=%s",
                     inheritableTunFd, ctx.dnsServers)
@@ -195,7 +199,10 @@ class XrayEngine @Inject constructor(
                 val tempFile = File(engineDir, "config.json")
                 tempFile.writeText(jsonConfig)
                 configFile = tempFile
-                Timber.tag(TAG).d("Config written to %s", tempFile.absolutePath)
+                Timber.tag(TAG).i("CONFIG WRITTEN: path=%s, size=%d bytes",
+                    tempFile.absolutePath, jsonConfig.length())
+                // Dump first 300 chars of config for debugging
+                Timber.tag(TAG).i("CONFIG DUMP: %s", jsonConfig.take(500))
 
                 // 4. Debug: comprehensive binary check before execution
                 val binFile = java.io.File(binaryPath)
