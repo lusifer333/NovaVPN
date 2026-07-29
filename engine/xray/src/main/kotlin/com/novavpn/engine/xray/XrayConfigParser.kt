@@ -65,6 +65,13 @@ object XrayConfigParser {
         }
         val jsonStr = Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
         Timber.tag(TAG).d("Generated Xray config:\n%s", jsonStr)
+        // Log the inbound type and fd for diagnostic
+        val inbounds = root["inbounds"]?.jsonArray
+        val tunInbound = inbounds?.get(0)?.jsonObject
+        val inboundProto = tunInbound?.get("protocol")?.jsonPrimitive?.content ?: "unknown"
+        val inboundFd = tunInbound?.get("settings")?.jsonObject?.get("fd")?.jsonPrimitive?.content ?: "?"
+        Timber.tag(TAG).i("INBOUND_TYPE=%s, fd=%s, numInbounds=%d",
+            inboundProto, inboundFd, inbounds?.size ?: 0)
         return jsonStr
     }
 

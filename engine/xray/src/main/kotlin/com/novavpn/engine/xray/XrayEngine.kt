@@ -177,13 +177,11 @@ class XrayEngine @Inject constructor(
                 // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
                 // On Android 12+, ParcelFileDescriptor from VpnService.Builder has
                 // FD_CLOEXEC set, so the fd is closed in the child after fork/exec.
-                // Os.dup() creates a new fd that inherits across exec().
+                // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
                 inheritableTunFd = createInheritableTunFd(rawTunFd)
-                Timber.tag(TAG).i("TUN FD STATE: rawFd=%d, inheritableFd=%d, " +
-                    "same=%s, inheritable>=0=%s",
-                    rawTunFd, inheritableTunFd,
-                    rawTunFd == inheritableTunFd,
-                    inheritableTunFd >= 0)
+                val dupFailed = inheritableTunFd == rawTunFd
+                Timber.tag(TAG).i("TUN_FD_PASS: rawFd=%d, inheritableFd=%d, dupOK=%s",
+                    rawTunFd, inheritableTunFd, !dupFailed)
 
                 Timber.tag(TAG).i("Generating config with TUN fd=%d, dns=%s",
                     inheritableTunFd, ctx.dnsServers)
@@ -255,6 +253,16 @@ class XrayEngine @Inject constructor(
                 )
                 pb.redirectErrorStream(true)
                 pb.environment()?.put("XRAY_LOCATION_ASSET", ".") // if geo files are local
+
+                Timber.tag(TAG).i("XRAY_PROCESS_ARGS: %s run -c %s",
+                    binaryPath, tempFile.absolutePath)
+
+                // Verify inheritable fd is valid before spawning child
+                val fdPath = "/proc/self/fd/$inheritableTunFd"
+                val fdType = try {
+                    java.io.File(fdPath).exists()
+                } catch (_: Exception) { false }
+                Timber.tag(TAG).i("PROCFS_CHECK: fd=%d exists=%s", inheritableTunFd, fdType)
 
                 val xrayProcess = pb.start()
                 process = xrayProcess
