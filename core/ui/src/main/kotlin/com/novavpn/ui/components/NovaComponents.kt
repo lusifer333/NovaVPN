@@ -14,7 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.novavpn.domain.model.ConnectionState
+import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Subscription
 import com.novavpn.ui.theme.*
@@ -56,22 +56,22 @@ fun NovaTopBar(
  */
 @Composable
 fun NovaStatusIndicator(
-    state: ConnectionState,
+    state: VpnState,
     modifier: Modifier = Modifier
 ) {
     val color = when (state) {
-        ConnectionState.Connected -> StatusConnected
-        ConnectionState.Connecting -> StatusConnecting
-        ConnectionState.Disconnected -> StatusDisconnected
-        ConnectionState.Disconnecting -> StatusConnecting
-        ConnectionState.Error -> StatusError
+        is VpnState.Connected -> StatusConnected
+        is VpnState.Connecting -> StatusConnecting
+        is VpnState.Disconnected -> StatusDisconnected
+        is VpnState.Disconnecting -> StatusConnecting
+        is VpnState.Error -> StatusError
     }
     val label = when (state) {
-        ConnectionState.Connected -> "Connected"
-        ConnectionState.Connecting -> "Connecting…"
-        ConnectionState.Disconnected -> "Disconnected"
-        ConnectionState.Disconnecting -> "Disconnecting…"
-        ConnectionState.Error -> "Error"
+        is VpnState.Connected -> "Connected"
+        is VpnState.Connecting -> "Connecting…"
+        is VpnState.Disconnected -> "Disconnected"
+        is VpnState.Disconnecting -> "Disconnecting…"
+        is VpnState.Error -> "Error"
     }
 
     Surface(

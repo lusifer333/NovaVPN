@@ -1,7 +1,7 @@
 package com.novavpn.domain.usecase.connection
 
-import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.usecase.server.GetBestServerUseCase
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,16 +11,21 @@ import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Single source of truth for VPN connection state.
+ *
+ * [connectionState] is a [StateFlow] of [VpnState] — an atomic sealed
+ * interface that embeds error messages directly into [VpnState.Error],
+ * eliminating the dual-state problem (header says Error while button
+ * says Disconnect).
+ */
 @Singleton
 class ConnectUseCase @Inject constructor(
     private val getBestServer: GetBestServerUseCase,
     private val serverRepository: ServerRepository
 ) {
-    private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-
-    private val _lastError = MutableStateFlow<String?>(null)
-    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+    private val _connectionState = MutableStateFlow<VpnState>(VpnState.Disconnected)
+    val connectionState: StateFlow<VpnState> = _connectionState.asStateFlow()
 
     private var currentServer: ServerConfig? = null
 
@@ -33,26 +38,23 @@ class ConnectUseCase @Inject constructor(
     suspend fun connect(server: ServerConfig): Boolean {
         if (!serverRepository.isServerFromEnabledSubscription(server.id)) {
             Timber.tag(TAG).w("connect: server %s belongs to a disabled subscription — rejected", server.id.take(8))
-            _lastError.value = "Server belongs to a disabled subscription"
+            _connectionState.value = VpnState.Error("Server belongs to a disabled subscription")
             return false
         }
 
-        _connectionState.value = ConnectionState.Connecting
-        _lastError.value = null
+        _connectionState.value = VpnState.Connecting
         currentServer = server
         return true
     }
 
     suspend fun disconnect() {
-        _connectionState.value = ConnectionState.Disconnecting
+        _connectionState.value = VpnState.Disconnecting
         currentServer = null
-        _connectionState.value = ConnectionState.Disconnected
-        _lastError.value = null
+        _connectionState.value = VpnState.Disconnected
     }
 
-    fun updateState(state: ConnectionState, error: String? = null) {
+    fun updateState(state: VpnState) {
         _connectionState.value = state
-        if (error != null) _lastError.value = error
     }
 
     /**
@@ -86,5 +88,5 @@ class AutoConnectUseCase @Inject constructor(
 class ObserveConnectionStateUseCase @Inject constructor(
     private val connectUseCase: ConnectUseCase
 ) {
-    operator fun invoke(): StateFlow<ConnectionState> = connectUseCase.connectionState
+    operator fun invoke(): StateFlow<VpnState> = connectUseCase.connectionState
 }

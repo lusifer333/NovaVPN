@@ -1,11 +1,11 @@
 package com.novavpn.domain.usecase.connection
 
-import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.EngineFormat
 import com.novavpn.domain.model.Protocol
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Security
 import com.novavpn.domain.model.Transport
+import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.repository.ServerRepository
 import io.mockk.MockKAnnotations
 import io.mockk.coEvery
@@ -53,20 +53,22 @@ class ConnectUseCaseTest {
         val result = connectUseCase.connect(enabledServer)
 
         assertTrue(result)
-        assertEquals(ConnectionState.Connecting, connectUseCase.connectionState.value)
+        assertEquals(VpnState.Connecting, connectUseCase.connectionState.value)
         assertEquals("srv-1", connectUseCase.currentServerId)
         coVerify { serverRepo.isServerFromEnabledSubscription("srv-1") }
     }
 
     @Test
-    fun `connect to server from disabled subscription is rejected`() = runTest {
+    fun `connect to server from disabled subscription sets error state`() = runTest {
         coEvery { serverRepo.isServerFromEnabledSubscription("srv-2") } returns false
 
         val result = connectUseCase.connect(disabledServer)
 
         assertFalse(result)
-        // Connection state unchanged — still Disconnected
-        assertEquals(ConnectionState.Disconnected, connectUseCase.connectionState.value)
+        // State becomes Error with a message (not Disconnected)
+        val state = connectUseCase.connectionState.value
+        assertTrue(state is VpnState.Error)
+        assertEquals("Server belongs to a disabled subscription", (state as VpnState.Error).message)
         assertEquals(null, connectUseCase.currentServerId)
         coVerify { serverRepo.isServerFromEnabledSubscription("srv-2") }
     }
@@ -75,11 +77,11 @@ class ConnectUseCaseTest {
     fun `disconnect resets server and state`() = runTest {
         coEvery { serverRepo.isServerFromEnabledSubscription("srv-1") } returns true
         connectUseCase.connect(enabledServer)
-        assertEquals(ConnectionState.Connecting, connectUseCase.connectionState.value)
+        assertEquals(VpnState.Connecting, connectUseCase.connectionState.value)
 
         connectUseCase.disconnect()
 
-        assertEquals(ConnectionState.Disconnected, connectUseCase.connectionState.value)
+        assertEquals(VpnState.Disconnected, connectUseCase.connectionState.value)
         assertEquals(null, connectUseCase.currentServerId)
     }
 
@@ -97,11 +99,11 @@ class ConnectUseCaseTest {
         // 2. Simulate subscription being disabled AFTER connection was made
         // The connection state and currentServer remain unchanged
         assertEquals("srv-1", connectUseCase.currentServerId)
-        assertEquals(ConnectionState.Connecting, connectUseCase.connectionState.value)
+        assertEquals(VpnState.Connecting, connectUseCase.connectionState.value)
 
         // 3. Re-enable case: next connect attempt should work
         connectUseCase.disconnect()
-        assertEquals(ConnectionState.Disconnected, connectUseCase.connectionState.value)
+        assertEquals(VpnState.Disconnected, connectUseCase.connectionState.value)
     }
 }
 
@@ -124,7 +126,7 @@ class ObserveConnectionStateUseCaseTest {
         val observer = ObserveConnectionStateUseCase(connectUseCase)
 
         val initial = observer.invoke().value
-        assertEquals(ConnectionState.Disconnected, initial)
+        assertEquals(VpnState.Disconnected, initial)
 
         coEvery { serverRepo.isServerFromEnabledSubscription(any()) } returns true
         connectUseCase.connect(
@@ -132,6 +134,6 @@ class ObserveConnectionStateUseCaseTest {
                 protocol = Protocol.VMess, transport = Transport.TCP,
                 security = Security.TLS, rawConfig = "{}", engineFormat = EngineFormat.XrayJson)
         )
-        assertEquals(ConnectionState.Connecting, observer.invoke().value)
+        assertEquals(VpnState.Connecting, observer.invoke().value)
     }
 }

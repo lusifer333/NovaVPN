@@ -2,8 +2,8 @@ package com.novavpn.feature.servers
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.novavpn.domain.model.ConnectionState
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.StatisticsRepository
 import com.novavpn.domain.usecase.connection.ConnectUseCase
@@ -45,12 +45,12 @@ class ServersViewModel @Inject constructor(
 
         // Observe connection state
         viewModelScope.launch {
-            observeConnectionState().collect { connState ->
-                val connectedId = if (connState == ConnectionState.Connected)
+            observeConnectionState().collect { vpnState ->
+                val connectedId = if (vpnState is VpnState.Connected)
                     connectUseCase.currentServerId else null
                 _state.update {
                     it.copy(
-                        isConnected = connState == ConnectionState.Connected,
+                        isConnected = vpnState is VpnState.Connected,
                         connectedServerId = connectedId
                     )
                 }

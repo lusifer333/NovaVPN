@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.novavpn.domain.model.ConnectionState
+import com.novavpn.domain.model.VpnState
 import com.novavpn.ui.components.NovaTopBar
 import com.novavpn.ui.components.StatCard
 import com.novavpn.ui.theme.*
@@ -71,13 +71,12 @@ fun HomeScreen(
             // Connection status card
             val displayServer = state.currentServer ?: state.selectedServer
             ConnectionCard(
-                state = state.connectionState,
+                vpnState = state.vpnState,
                 serverName = displayServer?.let {
                     "${it.name} (${it.protocol.displayName})"
                 } ?: "No server selected",
                 serverAddress = displayServer?.let { "${it.address}:${it.port}" } ?: "",
                 isLoading = state.isLoading,
-                errorMessage = state.errorMessage,
                 onConnect = {
                     // Check VPN permission before connecting
                     val intent = android.net.VpnService.prepare(context)
@@ -203,25 +202,81 @@ fun HomeScreen(
     }
 }
 
+/**
+ * Connection status card.
+ *
+ * Button logic is derived from a single sealed [VpnState] — there is
+ * never a mismatch between header text and button label:
+ *
+ * | State           | Header          | Button          |
+ * |-----------------|-----------------|-----------------|
+ * | Disconnected    | Disconnected    | Connect         |
+ * | Connecting      | Connecting…     | Cancel          |
+ * | Connected       | Connected       | Disconnect      |
+ * | Disconnecting   | Disconnecting…  | Disconnect      |
+ * | Error(msg)      | {msg}           | Connect (retry) |
+ */
 @Composable
 private fun ConnectionCard(
-    state: ConnectionState,
+    vpnState: VpnState,
     serverName: String,
     serverAddress: String,
     isLoading: Boolean,
-    errorMessage: String?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
 ) {
-    val isConnected = state == ConnectionState.Connected
-    val isError = state == ConnectionState.Error
-    val showDisconnect = isConnected || isError
+    // ── Derived state (single source: vpnState) ──
+    val isConnected = vpnState == VpnState.Connected
+    val isDisconnected = vpnState == VpnState.Disconnected
+    val isConnecting = vpnState == VpnState.Connecting
+    val isDisconnecting = vpnState == VpnState.Disconnecting
+    val isError = vpnState is VpnState.Error
+
+    // Button = "Disconnect" only when Connected or Disconnecting
+    val showDisconnect = isConnected || isDisconnecting
+    // Button = "Cancel" when Connecting
+    val showCancel = isConnecting
+    // Button = "Connect" when Disconnected or Error (retry)
+    val showConnect = isDisconnected || isError
+
+    val buttonLabel = when {
+        showDisconnect -> "Disconnect"
+        showCancel -> "Cancel"
+        else -> "Connect"
+    }
+    val buttonIcon = when {
+        showDisconnect -> Icons.Default.Stop
+        showCancel -> Icons.Default.Close
+        else -> Icons.Default.PlayArrow
+    }
     val buttonColor by animateColorAsState(
-        targetValue = if (showDisconnect) StatusError else MaterialTheme.colorScheme.primary,
+        targetValue = when {
+            showDisconnect -> StatusError
+            showCancel -> StatusConnecting
+            else -> MaterialTheme.colorScheme.primary
+        },
         label = "buttonColor"
     )
-    val buttonIcon = if (showDisconnect) Icons.Default.Stop else Icons.Default.PlayArrow
-    val buttonLabel = if (showDisconnect) "Disconnect" else "Connect"
+
+    // Status text
+    val statusText = when (vpnState) {
+        is VpnState.Connected -> "Connected"
+        is VpnState.Connecting -> "Connecting…"
+        is VpnState.Disconnecting -> "Disconnecting…"
+        is VpnState.Disconnected -> "Disconnected"
+        is VpnState.Error -> "Connection Error"
+    }
+
+    // Status color
+    val statusColor = when (vpnState) {
+        is VpnState.Connected -> StatusConnected
+        is VpnState.Connecting -> StatusConnecting
+        is VpnState.Error -> StatusError
+        else -> StatusDisconnected
+    }
+
+    // Error message — embedded in the sealed type, no separate field
+    val errorMessage = (vpnState as? VpnState.Error)?.message
 
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -236,22 +291,7 @@ private fun ConnectionCard(
                 .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Status indicator
-            val statusColor = when (state) {
-                ConnectionState.Connected -> StatusConnected
-                ConnectionState.Connecting -> StatusConnecting
-                ConnectionState.Error -> StatusError
-                else -> StatusDisconnected
-            }
-            val statusText = when (state) {
-                ConnectionState.Connected -> "Connected"
-                ConnectionState.Connecting -> "Connecting…"
-                ConnectionState.Disconnecting -> "Disconnecting…"
-                ConnectionState.Disconnected -> "Disconnected"
-                ConnectionState.Error -> "Connection Error"
-            }
-
-            // Large status indicator circle
+            // Status indicator circle
             Surface(
                 modifier = Modifier.size(80.dp),
                 shape = CircleShape,
@@ -296,7 +336,7 @@ private fun ConnectionCard(
 
             Spacer(Modifier.height(24.dp))
 
-            // Error message
+            // Error message — only when VpnState.Error
             if (isError && errorMessage != null) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
@@ -313,9 +353,12 @@ private fun ConnectionCard(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Connect/Disconnect button
+            // Connect / Cancel / Disconnect button
             Button(
-                onClick = if (showDisconnect) onDisconnect else onConnect,
+                onClick = when {
+                    showDisconnect -> onDisconnect
+                    else -> onConnect
+                },
                 enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
                 modifier = Modifier
