@@ -28,6 +28,7 @@ import com.novavpn.ui.theme.*
 @Composable
 fun HomeScreen(
     onNavigateToServers: () -> Unit,
+    onNavigateToLogs: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -39,17 +40,22 @@ fun HomeScreen(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            // Permission granted — retry connection
             viewModel.retryConnect()
         } else {
-            // Permission denied
             viewModel.onVpnPermissionDenied()
         }
     }
 
     Scaffold(
         topBar = {
-            NovaTopBar(title = "NovaVPN")
+            NovaTopBar(
+                title = "NovaVPN",
+                actions = {
+                    IconButton(onClick = onNavigateToLogs) {
+                        Icon(Icons.Default.Terminal, contentDescription = "Logs")
+                    }
+                }
+            )
         }
     ) { padding ->
         Column(

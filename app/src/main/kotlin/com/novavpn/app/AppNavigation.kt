@@ -85,6 +85,9 @@ fun AppNavigation() {
                             popUpTo(Screen.Home.route) { saveState = true }
                             launchSingleTop = true
                         }
+                    },
+                    onNavigateToLogs = {
+                        navController.navigate(Screen.Logs.route)
                     }
                 )
             }
