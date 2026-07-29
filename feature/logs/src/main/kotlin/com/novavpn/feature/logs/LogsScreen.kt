@@ -12,6 +12,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,6 +24,7 @@ import com.novavpn.domain.model.LogEntry
 import com.novavpn.domain.model.LogLevel
 import com.novavpn.ui.components.NovaTopBar
 import com.novavpn.ui.theme.*
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,15 +52,13 @@ fun LogsScreen(
                     IconButton(onClick = { viewModel.clearLogs() }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
                     }
-                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val clipboard = LocalClipboardManager.current
+                    val context = LocalContext.current
                     IconButton(onClick = {
                         serviceScope.launch {
                             val text = viewModel.copyLogs()
-                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
-                            context?.let {
-                                android.widget.Toast.makeText(it, "Logs copied", android.widget.Toast.LENGTH_SHORT).show()
-                            }
+                            clipboard.setText(AnnotatedString(text))
+                            android.widget.Toast.makeText(context, "Logs copied", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }) {
                         Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
@@ -64,7 +66,6 @@ fun LogsScreen(
                     IconButton(onClick = {
                         serviceScope.launch {
                             val text = viewModel.exportLogs()
-                            // Save to Downloads
                             val file = java.io.File(
                                 android.os.Environment.getExternalStoragePublicDirectory(
                                     android.os.Environment.DIRECTORY_DOWNLOADS
@@ -72,9 +73,7 @@ fun LogsScreen(
                                 "NovaVPN-logs-${java.lang.System.currentTimeMillis()}.txt"
                             )
                             file.writeText(text)
-                            context?.let {
-                                android.widget.Toast.makeText(it, "Saved to Downloads", android.widget.Toast.LENGTH_SHORT).show()
-                            }
+                            android.widget.Toast.makeText(context, "Saved to Downloads", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }) {
                         Icon(Icons.Default.SaveAlt, contentDescription = "Export")
