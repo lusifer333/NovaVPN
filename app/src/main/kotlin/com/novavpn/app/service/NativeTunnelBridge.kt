@@ -88,7 +88,7 @@ class NativeTunnelBridge @Inject constructor(
             bridgeProcess = pb.start()
 
             // Wait briefly and check if process stays alive
-            val alive = bridgeProcess?.waitFor(BRIDGE_TIMEOUT_SEC, TimeUnit.SECONDS) == false
+            val alive = bridgeProcess?.waitFor(BRIDGE_TIMEOUT_SEC.toLong(), TimeUnit.SECONDS) == false
 
             if (alive) {
                 status = BridgeStatus.Running
@@ -247,7 +247,7 @@ class NativeTunnelBridge @Inject constructor(
         target.setExecutable(true, false)
         try {
             Runtime.getRuntime().exec(arrayOf("chmod", "755", target.absolutePath))
-                .waitFor(2, TimeUnit.SECONDS)
+                .waitFor(2L, TimeUnit.SECONDS)
         } catch (_: Exception) { }
 
         val sizeKb = target.length() / 1024
