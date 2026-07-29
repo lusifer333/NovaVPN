@@ -80,19 +80,21 @@ class NativeTunnelBridge @Inject constructor(
             binaryPath = possiblePaths.firstOrNull { File(it).exists() } ?: ""
             Timber.tag(TAG).i("BRIDGE_BINARY_SEARCH: paths=%s, found=%s",
                 possiblePaths, if (binaryPath.isNotEmpty()) binaryPath else "NOT_FOUND")
+            Timber.tag(TAG).i("BRIDGE_BINARY_PATH: %s", if (binaryPath.isNotEmpty()) binaryPath else "MISSING")
 
             if (binaryPath.isEmpty()) {
                 Timber.tag(TAG).w("BRIDGE_BINARY_MISSING: place %s in jniLibs/<abi>/", BINARY_NAME)
                 Timber.tag(TAG).i("BRIDGE_DIAG_MODE: no native binary, reporting diagnostics only")
                 status = BridgeStatus.Running
                 updateTunDiagnostics()
+                Timber.tag(TAG).i("BRIDGE_START_RESULT: DIAG_MODE (no binary)")
                 return
             }
 
             File(binaryPath).setExecutable(true, false)
 
             val cmd = listOf(binaryPath, "--fd", tunFd.toString(), "--socks5", "$socksHost:$socksPort")
-            Timber.tag(TAG).i("BRIDGE_SPAWN: %s", cmd.joinToString(" "))
+            Timber.tag(TAG).i("BRIDGE_COMMAND: %s", cmd.joinToString(" "))
 
             val pb = ProcessBuilder(cmd).redirectErrorStream(true)
             bridgeProcess = pb.start()
@@ -104,12 +106,14 @@ class NativeTunnelBridge @Inject constructor(
             if (alive) {
                 status = BridgeStatus.Running
                 Timber.tag(TAG).i("BRIDGE_RUNNING: alive=true")
+                Timber.tag(TAG).i("BRIDGE_START_RESULT: SUCCESS")
             } else {
                 val exitCode = bridgeProcess?.exitValue() ?: -1
                 val output = try {
                     bridgeProcess?.inputStream?.bufferedReader()?.readText() ?: ""
                 } catch (_: Exception) { "" }
                 Timber.tag(TAG).w("BRIDGE_EXITED: exit=%d, output=%s", exitCode, output.take(500))
+                Timber.tag(TAG).i("BRIDGE_START_RESULT: FAILED (exit=%d)", exitCode)
                 status = BridgeStatus.Failed
                 bridgeProcess = null
             }
