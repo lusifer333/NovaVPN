@@ -25,6 +25,14 @@ object TunDiagnostics {
     var socks5Listening: Boolean = false
     @Volatile
     var tunReadAttempts: Int = 0
+    @Volatile
+    var bridgeRunning: Boolean = false
+    @Volatile
+    var bridgePackets: Long = 0
+    @Volatile
+    var bridgeBytes: Long = 0
+    @Volatile
+    var bridgeErrors: Long = 0
 
     fun storePid(pid: Int) { xrayPid = pid }
 
@@ -38,5 +46,9 @@ object TunDiagnostics {
         xrayPid = -1
         socks5Listening = false
         tunReadAttempts = 0
+        bridgeRunning = false
+        bridgePackets = 0
+        bridgeBytes = 0
+        bridgeErrors = 0
     }
 }

@@ -52,8 +52,44 @@ else
   echo "  Installed: $XRAY_SO ($(du -h "$XRAY_SO" | cut -f1))"
 fi
 
+# ------------------------------------------------------------
+# hev-socks5-tunnel  →  jniLibs/<arch>/hev-socks5-tunnel
+# TUN-to-SOCKS5 bridge binary for Android.
+# ------------------------------------------------------------
 echo ""
-echo "==> Done! Binary ready under $JNILIBS_DIR/$ARCH/"
+echo "--- hev-socks5-tunnel ($ARCH) ---"
+
+TUNNEL_BIN="$JNILIBS_DIR/$ARCH/hev-socks5-tunnel"
+
+if [ -f "$TUNNEL_BIN" ]; then
+  echo "  Already exists: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"
+  echo "  Skipping."
+else
+  echo "  NOTE: hev-socks5-tunnel is not yet pre-built for Android."
+  echo "  Building from source requires Go + NDK cross-compilation."
+  echo "  See: https://github.com/heiher/hev-socks5-tunnel"
+  echo ""
+  echo "  For now, the bridge runs in diagnostic mode (no native binary)."
+  echo "  Place a pre-built hev-socks5-tunnel binary at:"
+  echo "    $TUNNEL_BIN"
+  echo ""
+
+  # Create a placeholder script that logs bridge status
+  cat > "$TUNNEL_BIN" << 'BRIDGE_PLACEHOLDER'
+#!/system/bin/sh
+# hev-socks5-tunnel bridge — placeholder
+# Real binary should be compiled and placed here.
+echo "hev-socks5-tunnel: diagnostic mode"
+echo "TUN fd: $1"
+echo "SOCKS5: $2:$3"
+exit 0
+BRIDGE_PLACEHOLDER
+  chmod +x "$TUNNEL_BIN"
+  echo "  Created placeholder: $TUNNEL_BIN"
+fi
+
+echo ""
+echo "==> Done! Binaries ready under $JNILIBS_DIR/$ARCH/"
 echo ""
 echo "Next: rebuild the APK with:"
 echo "  ./gradlew assembleDebug"

@@ -218,7 +218,7 @@ class NovaVpnService : VpnService() {
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
                     "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d, " +
-                    "socks5=%s, tunReads=%d",
+                    "socks5=%s, tunReads=%d, bridge=%s, bPkts=%d, bBytes=%d, bErr=%d",
                     counter, fd, tunFdValid, engineState,
                     com.novavpn.domain.model.TunDiagnostics.rawFd,
                     com.novavpn.domain.model.TunDiagnostics.inheritableFd,
@@ -226,7 +226,11 @@ class NovaVpnService : VpnService() {
                     com.novavpn.domain.model.TunDiagnostics.inboundType,
                     com.novavpn.domain.model.TunDiagnostics.numInbounds,
                     com.novavpn.domain.model.TunDiagnostics.socks5Listening,
-                    com.novavpn.domain.model.TunDiagnostics.tunReadAttempts)
+                    com.novavpn.domain.model.TunDiagnostics.tunReadAttempts,
+                    com.novavpn.domain.model.TunDiagnostics.bridgeRunning,
+                    com.novavpn.domain.model.TunDiagnostics.bridgePackets,
+                    com.novavpn.domain.model.TunDiagnostics.bridgeBytes,
+                    com.novavpn.domain.model.TunDiagnostics.bridgeErrors)
             }
         }
 
