@@ -103,7 +103,7 @@ class NativeTunnelBridge @Inject constructor(
 
             if (alive) {
                 status = BridgeStatus.Running
-                Timber.tag(TAG).i("BRIDGE_RUNNING: pid=%d", bridgeProcess?.pid() ?: -1)
+                Timber.tag(TAG).i("BRIDGE_RUNNING: alive=true")
             } else {
                 val exitCode = bridgeProcess?.exitValue() ?: -1
                 val output = try {
