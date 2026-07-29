@@ -35,7 +35,7 @@ class NovaLogger @Inject constructor() {
     private val buffer = CircularBuffer<LogEntry>(BUFFER_CAPACITY)
 
     private val _logFlow = MutableSharedFlow<LogEntry>(
-        replay = 0,
+        replay = BUFFER_CAPACITY,
         extraBufferCapacity = 64
     )
 
