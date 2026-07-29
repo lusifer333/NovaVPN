@@ -189,14 +189,29 @@ class NovaVpnService : VpnService() {
                     } catch (_: Exception) { false }
                 } else false
 
+                // Check if SOCKS5 port 10808 is listening
+                if (counter % 2 == 1) { // every other cycle
+                    try {
+                        val sock = java.net.Socket()
+                        sock.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 200)
+                        TunDiagnostics.socks5Listening = true
+                        sock.close()
+                    } catch (_: Exception) {
+                        TunDiagnostics.socks5Listening = false
+                    }
+                }
+
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
-                    "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d",
+                    "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d, " +
+                    "socks5=%s, tunReads=%d",
                     counter, fd, tunFdValid, engineState,
                     com.novavpn.domain.model.TunDiagnostics.rawFd,
                     com.novavpn.domain.model.TunDiagnostics.inheritableFd,
                     com.novavpn.domain.model.TunDiagnostics.dupOK,
                     com.novavpn.domain.model.TunDiagnostics.inboundType,
-                    com.novavpn.domain.model.TunDiagnostics.numInbounds)
+                    com.novavpn.domain.model.TunDiagnostics.numInbounds,
+                    com.novavpn.domain.model.TunDiagnostics.socks5Listening,
+                    com.novavpn.domain.model.TunDiagnostics.tunReadAttempts)
             }
         }
 

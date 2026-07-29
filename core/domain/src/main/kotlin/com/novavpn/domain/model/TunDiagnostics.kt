@@ -21,6 +21,10 @@ object TunDiagnostics {
     var processArgs: String = ""
     @Volatile
     var xrayPid: Int = -1
+    @Volatile
+    var socks5Listening: Boolean = false
+    @Volatile
+    var tunReadAttempts: Int = 0
 
     fun storePid(pid: Int) { xrayPid = pid }
 
@@ -32,5 +36,7 @@ object TunDiagnostics {
         numInbounds = 0
         processArgs = ""
         xrayPid = -1
+        socks5Listening = false
+        tunReadAttempts = 0
     }
 }
