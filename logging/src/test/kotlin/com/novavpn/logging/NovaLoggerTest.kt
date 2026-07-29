@@ -125,4 +125,38 @@ class NovaLoggerTest {
         assertEquals("via log()", recent.last().message)
         assertEquals(LogLevel.Warning, recent.last().level)
     }
+
+    @Test
+    fun `clear removes all logs`() {
+        logger.i("C", "log one")
+        logger.i("C", "log two")
+        assertEquals(2, logger.getRecent(10).size)
+
+        logger.clear()
+
+        val after = logger.getRecent(10)
+        assertTrue("Buffer should be empty after clear", after.isEmpty())
+    }
+
+    @Test
+    fun `after clear new logs still appear`() {
+        logger.i("B", "before")
+        logger.clear()
+        logger.i("A", "after clear")
+
+        val logs = logger.getRecent(10)
+        assertEquals("Only new log should appear", 1, logs.size)
+        assertEquals("after clear", logs[0].message)
+    }
+
+    @Test
+    fun `clear then immediate add works`() {
+        logger.i("X", "will be cleared")
+        logger.clear()
+        logger.d("Y", "fresh log")
+        val logs = logger.getRecent(10)
+        assertEquals(1, logs.size)
+        assertEquals("fresh log", logs[0].message)
+        assertEquals(LogLevel.Debug, logs[0].level)
+    }
 }

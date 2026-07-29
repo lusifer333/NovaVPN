@@ -98,6 +98,13 @@ class NovaLogger @Inject constructor() {
         return snapshot.takeLast(count.coerceAtLeast(0))
     }
 
+    /** Clear all stored logs. */
+    fun clear() {
+        buffer.clear()
+        // Reset SharedFlow by clearing replay cache
+        _logFlow.resetReplayCache()
+    }
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
@@ -134,6 +141,8 @@ internal class CircularBuffer<T>(private val capacity: Int) {
     }
 
     fun toList(): List<T> = list.toList()
+
+    fun clear() { list.clear() }
 
     val size: Int get() = list.size
 }

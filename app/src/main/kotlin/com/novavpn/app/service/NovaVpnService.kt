@@ -182,15 +182,15 @@ class NovaVpnService : VpnService() {
                 val rx = engineManager.activeEngine?.bytesReceived?.value ?: 0L
                 val tx = engineManager.activeEngine?.bytesSent?.value ?: 0L
 
-                // Check if TUN fd is still open and valid
+                // Check if TUN fd is still open in this process
                 val tunFdValid = if (fd >= 0) {
                     try {
                         java.io.File("/proc/self/fd/$fd").exists()
                     } catch (_: Exception) { false }
                 } else false
 
-                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, rx=%d, tx=%d",
-                    counter, fd, tunFdValid, engineState, rx, tx)
+                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s",
+                    counter, fd, tunFdValid, engineState)
             }
         }
 

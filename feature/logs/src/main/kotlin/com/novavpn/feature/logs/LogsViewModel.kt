@@ -68,9 +68,7 @@ class LogsViewModel @Inject constructor(
     }
 
     fun clearLogs() {
-        viewModelScope.launch {
-            logRepository.clear()
-        }
+        novaLogger.clear()
     }
 
     fun addTestLog() {
