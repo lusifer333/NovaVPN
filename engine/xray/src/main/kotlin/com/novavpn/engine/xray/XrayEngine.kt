@@ -391,7 +391,7 @@ class XrayEngine @Inject constructor(
         // is owned by NovaVpnService (tunInterface).
         if (inheritableTunFd >= 0) {
             try {
-                android.system.Os.close(inheritableTunFd)
+                closeFd(inheritableTunFd)
                 Timber.tag(TAG).d("Closed inheritable TUN fd: %d", inheritableTunFd)
             } catch (e: Exception) {
                 Timber.tag(TAG).w("Failed to close inheritable TUN fd: %s", e.message)
@@ -426,6 +426,15 @@ class XrayEngine @Inject constructor(
             Timber.tag(TAG).w("Os.dup failed, using raw fd: %s", e.message)
             rawFd
         }
+    }
+
+    /** Close a file descriptor by int value using reflection + Os.close. */
+    private fun closeFd(fdInt: Int) {
+        val fd = FileDescriptor()
+        val field = FileDescriptor::class.java.getDeclaredField("descriptor")
+        field.isAccessible = true
+        field.setInt(fd, fdInt)
+        android.system.Os.close(fd)
     }
 
     companion object {
