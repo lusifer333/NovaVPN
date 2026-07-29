@@ -21,16 +21,20 @@ class XrayConfigParserTest {
         root["outbounds"]!!.jsonArray!![0]!!.jsonObject
 
     private fun vlessUser(root: JsonObject): JsonObject {
-        return proxyOutbound(root)["settings"]!!.jsonObject!!
-            ["vnext"]!!.jsonArray!![0]!!.jsonObject
-            ["users"]!!.jsonArray!![0]!!.jsonObject
+        val vnext = proxyOutbound(root)["settings"]!!.jsonObject!!["vnext"]!!.jsonArray!!
+        val usersObj = vnext[0]!!.jsonObject["users"]!!.jsonArray!!
+        return usersObj[0]!!.jsonObject
     }
 
-    private fun trojanServer(root: JsonObject): JsonObject =
-        proxyOutbound(root)["settings"]!!.jsonObject!!["servers"]!!.jsonArray!![0]!!.jsonObject
+    private fun trojanServer(root: JsonObject): JsonObject {
+        val servers = proxyOutbound(root)["settings"]!!.jsonObject!!["servers"]!!.jsonArray!!
+        return servers[0]!!.jsonObject
+    }
 
-    private fun ssServer(root: JsonObject): JsonObject =
-        proxyOutbound(root)["settings"]!!.jsonObject!!["servers"]!!.jsonArray!![0]!!.jsonObject
+    private fun ssServer(root: JsonObject): JsonObject {
+        val servers = proxyOutbound(root)["settings"]!!.jsonObject!!["servers"]!!.jsonArray!!
+        return servers[0]!!.jsonObject
+    }
 
     // ------------------------------------------------------------------
     // 1. VLESS config builder
