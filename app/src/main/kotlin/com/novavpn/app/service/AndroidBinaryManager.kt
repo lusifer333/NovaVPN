@@ -69,38 +69,50 @@ class AndroidBinaryManager @Inject constructor(
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
             // 1. Check native library path first (best — proper SELinux context)
+            //    IMPORTANT: execute directly from nativeLibraryDir, NEVER copy to
+            //    filesDir. SELinux policy (app_data_file) forbids execution from
+            //    app data directories on Android 10+ — only apk_data_file in
+            //    nativeLibraryDir has the execmem/execmod permission.
             val nativePath = nativeBinaryFile(type)
             if (nativePath.exists() && nativePath.canExecute()) {
-                // Copy to engine directory for persistence
-                val target = copyToEngineDir(nativePath, type)
-                Timber.tag(TAG).i("Engine ready from native lib: %s", target.absolutePath)
-                return@runCatching target.absolutePath
+                Timber.tag(TAG).i("Engine ready from native lib: %s (%d bytes)",
+                    nativePath.absolutePath, nativePath.length())
+                return@runCatching nativePath.absolutePath
             }
 
-            // 2. Try extracting from native lib path if exists but not executable
+            // 2. Native lib exists but not executable — warn (SELinux issue)
             if (nativePath.exists()) {
-                nativePath.setExecutable(true, false)
-                try {
-                    Runtime.getRuntime().exec(arrayOf("chmod", "755", nativePath.absolutePath))
-                        .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-                } catch (_: Exception) { }
-                if (nativePath.canExecute()) {
-                    val target = copyToEngineDir(nativePath, type)
-                    Timber.tag(TAG).i("Engine fixed and copied: %s", target.absolutePath)
-                    return@runCatching target.absolutePath
-                }
+                Timber.tag(TAG).w("Native lib exists but NOT executable: %s — SELinux?",
+                    nativePath.absolutePath)
+            } else {
+                Timber.tag(TAG).w("Native lib NOT FOUND: %s",
+                    nativePath.absolutePath)
             }
 
-            // 3. Fallback: extract from assets
+            // 3. Fallback: extract from assets to engine directory
+            //    NOTE: on Android 10+ SELinux (app_data_file) may still block
+            //    execution from filesDir even after chmod.
             try {
                 return@runCatching extractFromAssets(type)
             } catch (e: FileNotFoundException) {
                 Timber.tag(TAG).w("Assets fallback failed: %s", e.message)
             }
 
-            // 4. Last resort: read .so directly from installed APK zip
-            // Works even without extractNativeLibs
-            return@runCatching extractFromApkZip(type)
+            // 4. Last resort: extract .so from APK zip directly
+            try {
+                return@runCatching extractFromApkZip(type)
+            } catch (e: FileNotFoundException) {
+                Timber.tag(TAG).w("APK zip fallback failed: %s", e.message)
+            }
+
+            // Nothing worked — throw a comprehensive error
+            throw FileNotFoundException(buildString {
+                appendLine("Engine binary not found — all methods exhausted!")
+                appendLine("  1. nativeLibraryDir: ${nativePath.absolutePath}")
+                appendLine("  2. Assets: ${assetsPath(type)}")
+                appendLine("  3. APK zip: lib/$abi/lib${type.name.lowercase()}.so")
+                appendLine("  Run: scripts/download-engines.sh")
+            })
         }
     }
 
@@ -179,20 +191,6 @@ class AndroidBinaryManager @Inject constructor(
 
     private fun binaryFile(type: EngineType): File {
         return File(engineDirectory, "${type.name.lowercase()}/$abi/${type.name.lowercase()}")
-    }
-
-    private fun copyToEngineDir(source: File, type: EngineType): File {
-        val target = binaryFile(type)
-        target.parentFile?.mkdirs()
-        source.inputStream().use { input ->
-            target.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-        target.setExecutable(true, false)
-        Timber.tag(TAG).d("Copied engine %s to %s (%d bytes)",
-            type.name, target.absolutePath, target.length())
-        return target
     }
 
     private fun extractFromAssets(type: EngineType): String {
