@@ -144,7 +144,7 @@ object SubscriptionParser {
                 protocol = Protocol.VMess,
                 transport = transport,
                 security = security,
-                rawConfig = link,
+                rawConfig = decoded,  // already valid JSON from base64 decode
                 engineFormat = EngineFormat.XrayJson
             )
         } catch (e: Exception) {
@@ -313,13 +313,30 @@ object SubscriptionParser {
                 protocol = Protocol.Trojan,
                 transport = transport,
                 security = security,
-                rawConfig = link,
+                rawConfig = buildTrojanRawJson(password, params),
                 engineFormat = EngineFormat.XrayJson
             )
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "parseTrojanLink: failed to parse %s", link.take(60))
             null
         }
+    }
+
+    private fun buildTrojanRawJson(password: String, params: Map<String, String>): String {
+        return buildJsonObject {
+            put("password", JsonPrimitive(password))
+            params["flow"]?.let { put("flow", JsonPrimitive(it)) }
+            params["sni"]?.let { put("sni", JsonPrimitive(it)) }
+            params["serverName"]?.let { put("serverName", JsonPrimitive(it)) }
+            params["fingerprint"]?.let { put("fingerprint", JsonPrimitive(it)) }
+            params["publicKey"]?.let { put("publicKey", JsonPrimitive(it)) }
+            params["shortId"]?.let { put("shortId", JsonPrimitive(it)) }
+            params["spiderX"]?.let { put("spiderX", JsonPrimitive(it)) }
+            params["path"]?.let { put("path", JsonPrimitive(it)) }
+            params["host"]?.let { put("host", JsonPrimitive(it)) }
+            params["serviceName"]?.let { put("serviceName", JsonPrimitive(it)) }
+            params["alpn"]?.let { put("alpn", JsonPrimitive(it)) }
+        }.toString()
     }
 
     /**
@@ -341,6 +358,10 @@ object SubscriptionParser {
             val userInfo = if (qIdx >= 0) withoutName.substring(0, qIdx) else withoutName
             val queryStr = if (qIdx >= 0) withoutName.substring(qIdx + 1) else ""
 
+            val params = parseQueryParams(queryStr)
+            val plugin = params["plugin"] ?: ""
+            val pluginOpts = params["pluginOpts"] ?: params["plugin_opts"] ?: ""
+
             // Try legacy format first: userInfo is base64 of "method:password@host:port"
             val legacyDecoded = decodeBase64UrlSafe(userInfo)
             if (legacyDecoded != null && legacyDecoded.contains('@')) {
@@ -353,6 +374,7 @@ object SubscriptionParser {
                 val port = if (colonIdx >= 0) hostPort.substring(colonIdx + 1).toIntOrNull() ?: 443 else 443
 
                 if (address.isBlank()) return null
+                val (method, password) = splitMethodPassword(methodPassword)
 
                 return ServerConfig(
                     name = name.ifBlank { "${address}:${port}" },
@@ -361,8 +383,8 @@ object SubscriptionParser {
                     protocol = Protocol.Shadowsocks,
                     transport = Transport.TCP,
                     security = Security.None,
-                    rawConfig = link,
-                    engineFormat = EngineFormat.SIP008
+                    rawConfig = buildShadowsocksRawJson(method, password, plugin, pluginOpts),
+                    engineFormat = EngineFormat.XrayJson
                 )
             }
 
@@ -373,11 +395,13 @@ object SubscriptionParser {
                 val fullDecoded = decodeBase64UrlSafe(userInfo)
                 if (fullDecoded != null && fullDecoded.contains('@')) {
                     val atIdx2 = fullDecoded.indexOf('@')
+                    val methodPassword2 = fullDecoded.substring(0, atIdx2)
                     val hostPort2 = fullDecoded.substring(atIdx2 + 1)
                     val colonIdx2 = hostPort2.lastIndexOf(':')
                     val address2 = if (colonIdx2 >= 0) hostPort2.substring(0, colonIdx2) else hostPort2
                     val port2 = if (colonIdx2 >= 0) hostPort2.substring(colonIdx2 + 1).toIntOrNull() ?: 443 else 443
                     if (address2.isBlank()) return null
+                    val (method2, password2) = splitMethodPassword(methodPassword2)
 
                     return ServerConfig(
                         name = name.ifBlank { "${address2}:${port2}" },
@@ -386,8 +410,8 @@ object SubscriptionParser {
                         protocol = Protocol.Shadowsocks,
                         transport = Transport.TCP,
                         security = Security.None,
-                        rawConfig = link,
-                        engineFormat = EngineFormat.SIP008
+                        rawConfig = buildShadowsocksRawJson(method2, password2, plugin, pluginOpts),
+                        engineFormat = EngineFormat.XrayJson
                     )
                 }
                 Timber.tag(TAG).w("parseShadowsocksLink: missing @ separator")
@@ -395,12 +419,18 @@ object SubscriptionParser {
             }
 
             val encodedCreds = userInfo.substring(0, atIdx)
+            val decodedCreds = decodeBase64UrlSafe(encodedCreds)
             val hostPort = userInfo.substring(atIdx + 1)
             val colonIdx = hostPort.lastIndexOf(':')
             val address = if (colonIdx >= 0) hostPort.substring(0, colonIdx) else hostPort
             val port = if (colonIdx >= 0) hostPort.substring(colonIdx + 1).toIntOrNull() ?: 443 else 443
 
             if (address.isBlank()) return null
+            val (method, password) = if (decodedCreds != null) {
+                splitMethodPassword(decodedCreds)
+            } else {
+                Pair("aes-256-gcm", "")
+            }
 
             ServerConfig(
                 name = name.ifBlank { "${address}:${port}" },
@@ -409,8 +439,8 @@ object SubscriptionParser {
                 protocol = Protocol.Shadowsocks,
                 transport = Transport.TCP,
                 security = Security.None,
-                rawConfig = link,
-                engineFormat = EngineFormat.SIP008
+                rawConfig = buildShadowsocksRawJson(method, password, plugin, pluginOpts),
+                engineFormat = EngineFormat.XrayJson
             )
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "parseShadowsocksLink: failed to parse %s", link.take(60))
@@ -736,6 +766,31 @@ object SubscriptionParser {
                 key to value
             }
             .toMap()
+    }
+
+    /** Split "method:password" into (method, password). */
+    private fun splitMethodPassword(cred: String): Pair<String, String> {
+        val colonIdx = cred.indexOf(':')
+        return if (colonIdx >= 0) {
+            Pair(cred.substring(0, colonIdx), cred.substring(colonIdx + 1))
+        } else {
+            Pair(cred, "")
+        }
+    }
+
+    /** Build JSON rawConfig string for Shadowsocks. */
+    private fun buildShadowsocksRawJson(
+        method: String,
+        password: String,
+        plugin: String,
+        pluginOpts: String
+    ): String {
+        return buildJsonObject {
+            put("method", JsonPrimitive(method.ifBlank { "aes-256-gcm" }))
+            put("password", JsonPrimitive(password))
+            if (plugin.isNotBlank()) put("plugin", JsonPrimitive(plugin))
+            if (pluginOpts.isNotBlank()) put("plugin_opts", JsonPrimitive(pluginOpts))
+        }.toString()
     }
 
     /**

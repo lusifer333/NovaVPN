@@ -252,29 +252,89 @@ object XrayConfigParser {
     }
 
     private fun buildTrojanSettings(config: ServerConfig): JsonObject {
-        val raw = parseRawConfig(config.rawConfig)
-        val password = raw?.get("password")?.jsonPrimitive?.content ?: ""
-        val flow = raw?.get("flow")?.jsonPrimitive?.content
+        var raw = parseRawConfig(config.rawConfig)
+        var password = raw?.get("password")?.jsonPrimitive?.content ?: ""
+        var flow = raw?.get("flow")?.jsonPrimitive?.content
+
+        // Fallback for legacy trojan:// URL format
+        if (raw == null && config.rawConfig.startsWith("trojan://")) {
+            try {
+                val withoutPrefix = config.rawConfig.removePrefix("trojan://")
+                val withoutHash = withoutPrefix.split("#").first()
+                val withoutQuery = withoutHash.split("?").first()
+                val atIdx = withoutQuery.indexOf('@')
+                if (atIdx >= 0) {
+                    password = withoutQuery.substring(0, atIdx)
+                }
+                val qIdx = withoutHash.indexOf('?')
+                if (qIdx >= 0) {
+                    val qParams = withoutHash.substring(qIdx + 1).split("&").mapNotNull {
+                        val eq = it.split("=", limit = 2)
+                        if (eq.size == 2) eq[0] to eq[1] else null
+                    }.toMap()
+                    flow = qParams["flow"]
+                }
+            } catch (_: Exception) { }
+        }
+
+        val finalPassword = password
+        val finalFlow = flow
 
         return buildJsonObject {
             put("servers", buildJsonArray {
                 add(buildJsonObject {
                     put("address", JsonPrimitive(config.address))
                     put("port", JsonPrimitive(config.port))
-                    put("password", JsonPrimitive(password))
-                    if (flow != null) put("flow", JsonPrimitive(flow))
+                    put("password", JsonPrimitive(finalPassword))
+                    if (finalFlow != null) put("flow", JsonPrimitive(finalFlow))
                 })
             })
         }
     }
 
     private fun buildShadowsocksSettings(config: ServerConfig): JsonObject {
-        val raw = parseRawConfig(config.rawConfig)
-        val password = raw?.get("password")?.jsonPrimitive?.content ?: ""
-        val method = raw?.get("method")?.jsonPrimitive?.content ?: "aes-256-gcm"
-        val plugin = raw?.get("plugin")?.jsonPrimitive?.content
-        val pluginOpts = raw?.get("pluginOpts")?.jsonPrimitive?.content
+        var raw = parseRawConfig(config.rawConfig)
+        var password = raw?.get("password")?.jsonPrimitive?.content ?: ""
+        var method = raw?.get("method")?.jsonPrimitive?.content ?: "aes-256-gcm"
+        var plugin = raw?.get("plugin")?.jsonPrimitive?.content
+        var pluginOpts = raw?.get("pluginOpts")?.jsonPrimitive?.content
             ?: raw?.get("plugin_opts")?.jsonPrimitive?.content
+
+        // Fallback for legacy ss:// URL format
+        if (raw == null && config.rawConfig.startsWith("ss://")) {
+            try {
+                val stripped = config.rawConfig.removePrefix("ss://")
+                val withoutHash = stripped.split("#").first()
+                val qIdx = withoutHash.indexOf('?')
+                val userInfo = if (qIdx >= 0) withoutHash.substring(0, qIdx) else withoutHash
+                val queryStr = if (qIdx >= 0) withoutHash.substring(qIdx + 1) else ""
+                // Parse query params inline
+                val qParams = if (queryStr.isNotBlank()) {
+                    queryStr.split("&").mapNotNull {
+                        val eq = it.split("=", limit = 2)
+                        if (eq.size == 2) eq[0] to eq[1] else null
+                    }.toMap()
+                } else emptyMap()
+                plugin = qParams["plugin"]
+                pluginOpts = qParams["pluginOpts"] ?: qParams["plugin_opts"]
+
+                val atIdx = userInfo.indexOf('@')
+                if (atIdx >= 0) {
+                    val encodedCreds = userInfo.substring(0, atIdx)
+                    val decoded = try {
+                        val b64 = encodedCreds.replace("-", "+").replace("_", "/")
+                        String(java.util.Base64.getDecoder().decode(b64))
+                    } catch (_: Exception) { null }
+                    if (decoded != null) {
+                        val colonIdx = decoded.indexOf(':')
+                        if (colonIdx >= 0) {
+                            method = decoded.substring(0, colonIdx)
+                            password = decoded.substring(colonIdx + 1)
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
+        }
 
         return buildJsonObject {
             put("servers", buildJsonArray {
