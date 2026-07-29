@@ -82,6 +82,9 @@ class XrayEngine @Inject constructor(
     /** The inheritable (dup'd) TUN fd that Xray child process actually receives. */
     private var inheritableTunFd: Int = -1
 
+    /** Original TUN fd (before dup), for diagnostic. */
+    private var rawTunFd: Int = -1
+
     @Volatile
     private var process: Process? = null
 
@@ -122,6 +125,7 @@ class XrayEngine @Inject constructor(
                     EngineError(code = EngineError.ErrorCode.TUN_SETUP_FAILED, message = msg)
                 )
             }
+            rawTunFd = rawFd
             tunFdForChild = rawFd
 
             Timber.tag(TAG).i(
@@ -276,7 +280,9 @@ class XrayEngine @Inject constructor(
                 if (alive) {
                     // Process is still running after the brief wait
                     _state.value = EngineRuntimeState.Running
-                    Timber.tag(TAG).i("Xray engine is RUNNING")
+                    Timber.tag(TAG).i("XRAY_READY: pid=%d, rawFd=%d, inheritFd=%d, dupOK=%s",
+                        xrayProcess.pid(), rawTunFd, inheritableTunFd,
+                        rawTunFd != inheritableTunFd)
                     Result.success(Unit)
                 } else {
                     // Process exited immediately — capture its stderr

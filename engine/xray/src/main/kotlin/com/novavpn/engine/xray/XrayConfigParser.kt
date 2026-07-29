@@ -81,7 +81,7 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     private fun buildLogSection(): JsonObject = buildJsonObject {
-        put("loglevel", JsonPrimitive("debug"))
+        put("loglevel", JsonPrimitive("warning"))
         put("access", JsonPrimitive("/dev/null"))
         put("error", JsonPrimitive("/dev/null"))
     }
