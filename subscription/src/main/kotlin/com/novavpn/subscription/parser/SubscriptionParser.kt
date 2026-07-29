@@ -6,11 +6,17 @@ import com.novavpn.domain.model.Security
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Transport
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromStream
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import timber.log.Timber
 import java.io.ByteArrayInputStream
 import java.net.URLDecoder
@@ -182,8 +188,6 @@ object SubscriptionParser {
             val params = parseQueryParams(queryStr)
             val tlsVal = params["security"] ?: params["encryption"] ?: ""
             val net = params["type"] ?: "tcp"
-            val path = params["path"] ?: ""
-            val host = params["host"] ?: params["sni"] ?: ""
 
             val security = when {
                 tlsVal.equals("tls", ignoreCase = true) -> Security.TLS
@@ -205,13 +209,40 @@ object SubscriptionParser {
                 protocol = Protocol.VLESS,
                 transport = transport,
                 security = security,
-                rawConfig = link,
+                rawConfig = buildVlessRawJson(id, params),
                 engineFormat = EngineFormat.XrayJson
             )
         } catch (e: Exception) {
             Timber.tag(TAG).w(e, "parseVlessLink: failed to parse %s", link.take(60))
             null
         }
+    }
+
+    /**
+     * Build a JSON rawConfig string for VLESS from the parsed UUID and URL
+     * query parameters. This JSON is consumed by XrayConfigParser and
+     * ConfigValidator to extract fields like id, encryption, flow, etc.
+     */
+    private fun buildVlessRawJson(uuid: String, params: Map<String, String>): String {
+        return buildJsonObject {
+            put("id", JsonPrimitive(uuid))
+            put("encryption", JsonPrimitive(params["encryption"] ?: "none"))
+            // Flow (e.g. xtls-rprx-vision)
+            params["flow"]?.let { put("flow", JsonPrimitive(it)) }
+            // TLS/Reality fields
+            params["sni"]?.let { put("sni", JsonPrimitive(it)) }
+            params["serverName"]?.let { put("serverName", JsonPrimitive(it)) }
+            params["fingerprint"]?.let { put("fingerprint", JsonPrimitive(it)) }
+            params["publicKey"]?.let { put("publicKey", JsonPrimitive(it)) }
+            params["shortId"]?.let { put("shortId", JsonPrimitive(it)) }
+            params["spiderX"]?.let { put("spiderX", JsonPrimitive(it)) }
+            // Transport fields
+            params["path"]?.let { put("path", JsonPrimitive(it)) }
+            params["host"]?.let { put("host", JsonPrimitive(it)) }
+            params["serviceName"]?.let { put("serviceName", JsonPrimitive(it)) }
+            // ALPN
+            params["alpn"]?.let { put("alpn", JsonPrimitive(it)) }
+        }.toString()
     }
 
     /**

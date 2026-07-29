@@ -197,10 +197,42 @@ object XrayConfigParser {
     }
 
     private fun buildVlessSettings(config: ServerConfig): JsonObject {
-        val raw = parseRawConfig(config.rawConfig)
-        val id = raw?.get("id")?.jsonPrimitive?.content ?: ""
-        val encryption = raw?.get("encryption")?.jsonPrimitive?.content ?: "none"
-        val flow = raw?.get("flow")?.jsonPrimitive?.content
+        // Try parsing rawConfig as JSON first (new format from buildVlessRawJson)
+        var raw = parseRawConfig(config.rawConfig)
+        var id = raw?.get("id")?.jsonPrimitive?.content ?: ""
+        var encryption = raw?.get("encryption")?.jsonPrimitive?.content ?: "none"
+        var flow = raw?.get("flow")?.jsonPrimitive?.content
+
+        // Fallback for legacy vless:// URL format stored in DB
+        if (raw == null && config.rawConfig.startsWith("vless://")) {
+            try {
+                val withoutPrefix = config.rawConfig.removePrefix("vless://")
+                val withoutHash = withoutPrefix.split("#").first()
+                val withoutQuery = withoutHash.split("?").first()
+                val atIdx = withoutQuery.indexOf('@')
+                if (atIdx >= 0) {
+                    id = withoutQuery.substring(0, atIdx)
+                }
+                // Try to extract flow and encryption from query params
+                val qIdx = withoutHash.indexOf('?')
+                if (qIdx >= 0) {
+                    val queryStr = withoutHash.substring(qIdx + 1)
+                    val qParams = queryStr.split("&").mapNotNull {
+                        val eq = it.split("=", limit = 2)
+                        if (eq.size == 2) eq[0] to eq[1] else null
+                    }.toMap()
+                    encryption = qParams["encryption"] ?: "none"
+                    flow = qParams["flow"]
+                }
+                Timber.tag(TAG).d("Parsed VLESS id from legacy URL: %s", id.take(8))
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Failed to parse legacy VLESS URL: %s", e.message)
+            }
+        }
+
+        val finalId = id
+        val finalEncryption = encryption
+        val finalFlow = flow
 
         return buildJsonObject {
             put("vnext", buildJsonArray {
@@ -209,9 +241,9 @@ object XrayConfigParser {
                     put("port", JsonPrimitive(config.port))
                     put("users", buildJsonArray {
                         add(buildJsonObject {
-                            put("id", JsonPrimitive(id))
-                            put("encryption", JsonPrimitive(encryption))
-                            if (flow != null) put("flow", JsonPrimitive(flow))
+                            put("id", JsonPrimitive(finalId))
+                            put("encryption", JsonPrimitive(finalEncryption))
+                            if (finalFlow != null) put("flow", JsonPrimitive(finalFlow))
                         })
                     })
                 })
