@@ -36,6 +36,8 @@ import timber.log.Timber
  */
 object XrayConfigParser {
 
+    private const val TAG = "XrayConfig"
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -490,10 +492,6 @@ object XrayConfigParser {
         put("servers", buildJsonArray {
             dnsServers.forEach { add(JsonPrimitive(it)) }
         })
-    }
-
-    companion object {
-        private const val TAG = "XrayConfig"
     }
 
     // ------------------------------------------------------------------

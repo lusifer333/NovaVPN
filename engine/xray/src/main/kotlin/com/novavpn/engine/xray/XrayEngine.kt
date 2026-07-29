@@ -110,8 +110,6 @@ class XrayEngine @Inject constructor(
             // Store EngineContext for use in start()
             engineContext = context
 
-            // Dup the TUN fd to create a version without FD_CLOEXEC
-            // so the Xray child process inherits it.
             val rawFd = context.tunFileDescriptor
             if (rawFd < 0) {
                 val msg = "Invalid TUN file descriptor: $rawFd"
@@ -120,17 +118,11 @@ class XrayEngine @Inject constructor(
                     EngineError(code = EngineError.ErrorCode.TUN_SETUP_FAILED, message = msg)
                 )
             }
-            val dupFd = try {
-                android.system.Os.dup(rawFd)
-            } catch (e: Exception) {
-                Timber.tag(TAG).w("Os.dup(%d) failed: %s — using raw fd", rawFd, e.message)
-                rawFd
-            }
-            tunFdForChild = dupFd
+            tunFdForChild = rawFd
 
             Timber.tag(TAG).i(
-                "Initialized: tunFd=%d (dup=%d), dns=%s, routes=%s",
-                rawFd, dupFd, context.dnsServers, context.routes
+                "Initialized: tunFd=%d, dns=%s, routes=%s",
+                rawFd, context.dnsServers, context.routes
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -373,7 +365,7 @@ class XrayEngine @Inject constructor(
         process = null
     }
 
-    /** Remove the temporary config file + close dup'd TUN fd. */
+    /** Remove the temporary config file + reset engine state. */
     private fun cleanup() {
         configFile?.let {
             if (it.exists()) {
@@ -382,18 +374,8 @@ class XrayEngine @Inject constructor(
             }
         }
         configFile = null
-
-        // Close dup'd TUN fd to avoid leak
-        if (tunFdForChild >= 0) {
-            try {
-                android.system.Os.close(tunFdForChild)
-                Timber.tag(TAG).d("Closed dup'd TUN fd: %d", tunFdForChild)
-            } catch (e: Exception) {
-                Timber.tag(TAG).w("Failed to close dup'd TUN fd: %s", e.message)
-            }
-            tunFdForChild = -1
-        }
         engineContext = null
+        tunFdForChild = -1
     }
 
     companion object {
