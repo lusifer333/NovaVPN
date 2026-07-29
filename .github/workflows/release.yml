@@ -67,12 +67,11 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            - **Fixed:** All protocol parsers now store structured JSON in rawConfig
-              (VLESS, VMess, Trojan, Shadowsocks) instead of raw URLs
-            - **Fixed:** UI overflow — HomeScreen scrollable, stats visible after connect
-            - **Fixed:** TUN fd now properly inheritable (Os.dup) for Xray child process
-            - **Added:** Legacy URL fallbacks in all Xray config builders
-            - **Added:** Detailed logging for TUN setup, fd inheritance, engine output
+            - **Fixed:** Logs screen now shows past logs (SharedFlow replay fix)
+            - **Fixed:** DNS_PROBE_POSSIBLE (port 53 routing)
+            - **Fixed:** Notification permission on Android 13+
+            - **Fixed:** Dark mode theme selector now works
+            - **Added:** DIAG logging — TUN fd alive check every 5s
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
