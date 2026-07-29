@@ -163,9 +163,8 @@ class NovaVpnService : VpnService() {
             connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Crashed"); return
         }
 
-        Timber.tag(TAG).i("VPN CONNECTED to %s (%s:%d) via %s | config=%s",
-            cfg.name, cfg.address, cfg.port, engine.type.displayName,
-            configFile?.absolutePath ?: "unknown")
+        Timber.tag(TAG).i("VPN CONNECTED to %s (%s:%d) via %s",
+            cfg.name, cfg.address, cfg.port, engine.type.displayName)
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
