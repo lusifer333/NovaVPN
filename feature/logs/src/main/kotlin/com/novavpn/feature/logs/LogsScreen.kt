@@ -196,7 +196,12 @@ private fun DiagnosticsTab(state: LogsUiState) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 8.dp)
             ) {
-                items(items = state.entries.takeLast(200), key = { it.id }) { entry ->
+                // Deduplicate by stable id before rendering
+                val deduped = state.entries
+                    .takeLast(500)
+                    .distinctBy { it.id }
+                    .takeLast(200)
+                items(items = deduped, key = { it.id }) { entry ->
                     LogEntryItem(entry)
                 }
             }

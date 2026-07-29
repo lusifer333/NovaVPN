@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.util.LinkedList
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,6 +34,7 @@ class NovaLogger @Inject constructor() {
         private const val BUFFER_CAPACITY = 1000
     }
 
+    private val idCounter = AtomicLong(0)
     private val buffer = CircularBuffer<LogEntry>(BUFFER_CAPACITY)
 
     private val _logFlow = MutableSharedFlow<LogEntry>(
@@ -111,7 +113,7 @@ class NovaLogger @Inject constructor() {
 
     private fun buildEntry(level: LogLevel, tag: String, message: String): LogEntry {
         return LogEntry(
-            id = System.nanoTime(),
+            id = idCounter.incrementAndGet(),
             timestamp = System.currentTimeMillis(),
             level = level,
             tag = tag,
