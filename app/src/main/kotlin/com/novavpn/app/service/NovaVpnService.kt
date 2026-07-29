@@ -194,10 +194,10 @@ class NovaVpnService : VpnService() {
                     try {
                         val sock = java.net.Socket()
                         sock.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 200)
-                        TunDiagnostics.socks5Listening = true
+                        com.novavpn.domain.model.TunDiagnostics.socks5Listening = true
                         sock.close()
                     } catch (_: Exception) {
-                        TunDiagnostics.socks5Listening = false
+                        com.novavpn.domain.model.TunDiagnostics.socks5Listening = false
                     }
                 }
 
