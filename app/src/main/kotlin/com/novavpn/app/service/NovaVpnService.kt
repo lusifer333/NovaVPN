@@ -78,11 +78,21 @@ class NovaVpnService : VpnService() {
     }
 
     fun startVpn(config: ServerConfig?) {
+        Timber.tag(TAG).i("CONNECT_START: server=%s", config?.name ?: "null")
         currentConfig = config
-        connectionJob?.cancel()
+        // Cancel previous job safely — new job is created after cancellation
+        val previousJob = connectionJob
+        connectionJob = null
+        previousJob?.cancel()
         connectionJob = serviceScope.launch {
-            try { connect(config) } catch (e: Exception) {
-                Timber.e(e, "VPN failed")
+            try {
+                connect(config)
+            } catch (e: CancellationException) {
+                Timber.tag(TAG).w("CONNECT_CANCELLED: %s", e.message)
+                connectUseCase.updateState(ConnectionState.Error, "Connection cancelled")
+                updateNotification("Cancelled")
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "CONNECT_FAILED: %s", e.message)
                 connectUseCase.updateState(ConnectionState.Error, e.message ?: "VPN failed")
                 updateNotification("Connection failed")
             }
@@ -90,28 +100,34 @@ class NovaVpnService : VpnService() {
     }
 
     fun stopVpn() {
+        Timber.tag(TAG).i("DISCONNECT_START")
         connectionJob?.cancel()
+        connectionJob = null
         serviceScope.launch { stopVpnInternal() }
     }
 
     fun reconnect() {
         val config = currentConfig ?: return
+        Timber.tag(TAG).i("RECONNECT_START")
         connectionJob?.cancel()
+        connectionJob = null
         connectionJob = serviceScope.launch {
             stopVpnInternal(); connect(config)
         }
     }
 
     private suspend fun connect(config: ServerConfig?) {
+        Timber.tag(TAG).i("LIFECYCLE: CONNECTING → state=Connecting")
         connectUseCase.updateState(ConnectionState.Connecting)
         updateNotification("Connecting…")
 
         val cfg = config ?: run {
+            Timber.tag(TAG).e("LIFECYCLE: FAILED → no config")
             connectUseCase.updateState(ConnectionState.Error, "No server config provided")
             updateNotification("No server"); return
         }
 
-        Timber.tag(TAG).d("Connecting to %s (%s:%d, %s)", cfg.name, cfg.address, cfg.port, cfg.protocol)
+        Timber.tag(TAG).i("LIFECYCLE: CONNECT_STEP — building TUN for %s:%d", cfg.address, cfg.port)
 
         val tun = buildTun() ?: run {
             connectUseCase.updateState(ConnectionState.Error, "TUN interface failed to establish")
@@ -136,36 +152,35 @@ class NovaVpnService : VpnService() {
         Timber.tag(TAG).i("EngineContext created: tunFd=%d, dns=%s, routes=%s",
             ctx.tunFileDescriptor, ctx.dnsServers, ctx.routes)
 
-        Timber.tag(TAG).d("Initializing engine...")
+        Timber.tag(TAG).i("LIFECYCLE: ENGINE_INIT")
         engine.initialize(ctx).onFailure { error ->
-            val msg = "Engine init failed: ${error.message}"
-            Timber.tag(TAG).e(msg)
-            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Init failed"); return
+            Timber.tag(TAG).e("LIFECYCLE: ENGINE_INIT_FAILED → %s", error.message)
+            connectUseCase.updateState(ConnectionState.Error, error.message ?: "Init failed")
+            updateNotification("Init failed"); return
         }
-        Timber.tag(TAG).d("Engine initialized, starting...")
+        Timber.tag(TAG).i("LIFECYCLE: ENGINE_START")
         engine.start(cfg).onFailure { error ->
-            val msg = "Engine start failed: ${error.message}"
-            Timber.tag(TAG).e(msg)
-            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Start failed"); return
+            Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
+            connectUseCase.updateState(ConnectionState.Error, error.message ?: "Start failed")
+            updateNotification("Start failed"); return
         }
 
-        Timber.tag(TAG).d("Waiting for engine Running state...")
+        Timber.tag(TAG).i("LIFECYCLE: WAITING_FOR_RUNNING")
         val running = try {
             withTimeout(30_000L) {
                 engine.state.first { it == EngineRuntimeState.Running || it == EngineRuntimeState.Crashed }
             }
         } catch (_: TimeoutCancellationException) {
             engine.stop()
-            val msg = "Engine start timed out after 30s"
-            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Timeout"); return
+            Timber.tag(TAG).e("LIFECYCLE: TIMEOUT → engine not running after 30s")
+            connectUseCase.updateState(ConnectionState.Error, "Engine start timed out"); return
         }
         if (running == EngineRuntimeState.Crashed) {
-            val msg = "Engine process crashed during startup"
-            connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Crashed"); return
+            Timber.tag(TAG).e("LIFECYCLE: ENGINE_CRASHED")
+            connectUseCase.updateState(ConnectionState.Error, "Engine crashed during startup"); return
         }
 
-        Timber.tag(TAG).i("VPN CONNECTED to %s (%s:%d) via %s",
-            cfg.name, cfg.address, cfg.port, engine.type.displayName)
+        Timber.tag(TAG).i("LIFECYCLE: ENGINE_RUNNING → state=Connected")
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
@@ -230,15 +245,22 @@ class NovaVpnService : VpnService() {
     }
 
     private suspend fun stopVpnInternal() {
-        if (connectUseCase.connectionState.value == ConnectionState.Disconnected) return
+        if (connectUseCase.connectionState.value == ConnectionState.Disconnected) {
+            Timber.tag(TAG).d("LIFECYCLE: DISCONNECT_SKIP — already disconnected")
+            return
+        }
+        Timber.tag(TAG).i("LIFECYCLE: DISCONNECTING")
         connectUseCase.updateState(ConnectionState.Disconnecting)
         tunHealthJob?.cancel()
         tunHealthJob = null
+        Timber.tag(TAG).i("LIFECYCLE: ENGINE_STOP")
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
+        Timber.tag(TAG).i("LIFECYCLE: TUN_CLOSE")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
         com.novavpn.domain.model.TunDiagnostics.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        Timber.tag(TAG).i("LIFECYCLE: DISCONNECT_COMPLETE → state=Disconnected")
         connectUseCase.updateState(ConnectionState.Disconnected)
         stopSelf()
     }
