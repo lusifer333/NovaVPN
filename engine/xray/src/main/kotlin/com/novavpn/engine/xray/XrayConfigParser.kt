@@ -63,6 +63,7 @@ object XrayConfigParser {
             put("outbounds", buildOutbounds(config))
             put("routing", buildRouting())
             put("dns", buildDns(dnsServers))
+            put("policy", buildPolicy())
         }
         val jsonStr = Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
         Timber.tag(TAG).d("Generated Xray config:\n%s", jsonStr)
@@ -76,6 +77,8 @@ object XrayConfigParser {
         // Store in persistent TUN diagnostics
         com.novavpn.domain.model.TunDiagnostics.inboundType = inboundProto
         com.novavpn.domain.model.TunDiagnostics.numInbounds = inbounds?.size ?: 0
+        // Update: this config uses SOCKS5, not TUN inbound
+        com.novavpn.domain.model.TunDiagnostics.inboundType = "socks"
         return jsonStr
     }
 
@@ -104,24 +107,7 @@ object XrayConfigParser {
      * users can test with a local proxy client at 127.0.0.1:10808/10809.
      */
     private fun buildInbounds(tunFd: Int): JsonArray = buildJsonArray {
-        // Primary: TUN inbound for VPN traffic
-        add(buildJsonObject {
-            put("protocol", JsonPrimitive("tun"))
-            put("tag", JsonPrimitive("tun-in"))
-            put("settings", buildJsonObject {
-                put("fd", JsonPrimitive(tunFd))
-                put("mtu", JsonPrimitive(1500))
-                put("udp", JsonPrimitive(true))
-            })
-            put("sniffing", buildJsonObject {
-                put("enabled", JsonPrimitive(true))
-                put("destOverride", buildJsonArray {
-                    add(JsonPrimitive("http"))
-                    add(JsonPrimitive("tls"))
-                })
-            })
-        })
-        // Fallback: SOCKS5 for local proxy testing
+        // SOCKS5 inbound for VPN traffic forwarding
         add(buildJsonObject {
             put("listen", JsonPrimitive("127.0.0.1"))
             put("port", 10808)
@@ -132,7 +118,7 @@ object XrayConfigParser {
             })
             put("tag", JsonPrimitive("socks-in"))
         })
-        // Fallback: HTTP proxy
+        // HTTP proxy fallback
         add(buildJsonObject {
             put("listen", JsonPrimitive("127.0.0.1"))
             put("port", 10809)
@@ -606,17 +592,34 @@ object XrayConfigParser {
                 put("port", JsonPrimitive("53"))
                 put("outboundTag", JsonPrimitive("proxy"))
             })
-            // Route all inbound traffic through proxy
+            // Route all SOCKS/HTTP inbound traffic through proxy
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {
-                    add(JsonPrimitive("tun-in"))
                     add(JsonPrimitive("socks-in"))
                     add(JsonPrimitive("http-in"))
                 }
                 put("inboundTag", _inboundTags)
                 put("outboundTag", JsonPrimitive("proxy"))
             })
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // Policy section (for statistics)
+    // ------------------------------------------------------------------
+
+    private fun buildPolicy(): JsonObject = buildJsonObject {
+        put("levels", buildJsonObject {
+            put("0", buildJsonObject {
+                put("connIdle", JsonPrimitive(300))
+            })
+        })
+        put("system", buildJsonObject {
+            put("statsInboundUplink", JsonPrimitive(true))
+            put("statsInboundDownlink", JsonPrimitive(true))
+            put("statsOutboundUplink", JsonPrimitive(true))
+            put("statsOutboundDownlink", JsonPrimitive(true))
         })
     }
 

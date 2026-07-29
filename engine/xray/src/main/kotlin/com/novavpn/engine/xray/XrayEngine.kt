@@ -253,9 +253,8 @@ class XrayEngine @Inject constructor(
                 Timber.tag(TAG).i("Config validation: exit=%d, output:\n%s",
                     testExitCode, testOutput.take(1000))
 
-                if (testExitCode != 0 && testOutput.contains("tun", ignoreCase = true)) {
-                    Timber.tag(TAG).w("TUN inbound not supported by this Xray binary! " +
-                        "Config uses TUN fd=%d but binary rejected it.", inheritableTunFd)
+                if (testExitCode != 0) {
+                    Timber.tag(TAG).w("Xray config validation FAILED — check Program Logs for details")
                 }
 
                 // 6. Start the xray subprocess
