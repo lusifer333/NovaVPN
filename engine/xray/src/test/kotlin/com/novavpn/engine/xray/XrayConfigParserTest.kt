@@ -20,9 +20,11 @@ class XrayConfigParserTest {
     private fun proxyOutbound(root: JsonObject): JsonObject =
         root["outbounds"]!!.jsonArray!![0]!!.jsonObject
 
-    private fun vlessUser(root: JsonObject): JsonObject =
-        proxyOutbound(root)["settings"]!!.jsonObject!!["vnext"]!!.jsonArray!![0]!!.jsonObject
+    private fun vlessUser(root: JsonObject): JsonObject {
+        return proxyOutbound(root)["settings"]!!.jsonObject!!
+            ["vnext"]!!.jsonArray!![0]!!.jsonObject
             ["users"]!!.jsonArray!![0]!!.jsonObject
+    }
 
     private fun trojanServer(root: JsonObject): JsonObject =
         proxyOutbound(root)["settings"]!!.jsonObject!!["servers"]!!.jsonArray!![0]!!.jsonObject
