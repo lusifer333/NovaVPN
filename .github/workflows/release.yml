@@ -58,26 +58,72 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk \
              "NovaVPN-${VERSION}-debug.apk"
 
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Fetch tags so we can find the previous one
+          git fetch --tags --force 2>/dev/null || true
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          # Find previous tag in reverse semver order
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "untagged" | head -2 | tail -1)
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$CURRENT_TAG" ]; then
+            PREV_TAG=""
+          fi
+          echo "current=${CURRENT_TAG}" >> $GITHUB_OUTPUT
+          echo "previous=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+          # Generate changelog from commit messages
+          CHANGELOG=""
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --oneline --no-merges "${PREV_TAG}..${CURRENT_TAG}" 2>/dev/null || echo "")
+          fi
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG=$(git log --oneline --no-merges -10 "${CURRENT_TAG}" 2>/dev/null || echo "Initial release")
+          fi
+
+          # Format as markdown list
+          FORMATTED=""
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              # Strip commit hash
+              clean=$(echo "$line" | sed 's/^[a-f0-9]\{7,9\} //')
+              FORMATTED="${FORMATTED}- ${clean}"$'\n'
+            fi
+          done <<< "$CHANGELOG"
+
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "## NovaVPN ${CURRENT_TAG#v}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Changes" >> $GITHUB_OUTPUT
+          echo "${FORMATTED}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Download" >> $GITHUB_OUTPUT
+          echo "- **Debug APK**: \`NovaVPN-${CURRENT_TAG#v}-debug.apk\`" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "### Notes" >> $GITHUB_OUTPUT
+          echo "This is a **pre-release** build. Not intended for production use." >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Write body to file to avoid multi-line output issues
+          {
+            echo "## NovaVPN ${CURRENT_TAG#v}"
+            echo ""
+            echo "### Changes"
+            echo "${FORMATTED}"
+            echo ""
+            echo "### Download"
+            echo "- **Debug APK**: \`NovaVPN-${CURRENT_TAG#v}-debug.apk\`"
+            echo ""
+            echo "### Notes"
+            echo "This is a **pre-release** build. Not intended for production use."
+          } > /tmp/release-body.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "NovaVPN ${{ steps.version.outputs.version }}"
-          body: |
-            ## NovaVPN ${{ steps.version.outputs.version }}
-
-            ### Changes
-            - **Fixed:** Logs screen now shows past logs (SharedFlow replay fix)
-            - **Fixed:** DNS_PROBE_POSSIBLE (port 53 routing)
-            - **Fixed:** Notification permission on Android 13+
-            - **Fixed:** Dark mode theme selector now works
-            - **Added:** DIAG logging — TUN fd alive check every 5s
-
-            ### Download
-            - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
-
-            ### Notes
-            This is a **pre-release** build. Not intended for production use.
+          body_path: /tmp/release-body.md
           files: NovaVPN-*.apk
           prerelease: true
           draft: false
