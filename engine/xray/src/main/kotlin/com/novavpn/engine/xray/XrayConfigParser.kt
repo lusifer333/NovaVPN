@@ -429,6 +429,7 @@ object XrayConfigParser {
         val network = when (config.transport) {
             Transport.TCP -> "tcp"
             Transport.WebSocket -> "ws"
+            Transport.XHTTP -> "xhttp"
             Transport.gRPC -> "grpc"
             Transport.QUIC -> "quic"
             Transport.HTTP -> "http"
@@ -457,6 +458,7 @@ object XrayConfigParser {
         // Transport-specific settings
         when (config.transport) {
             Transport.WebSocket -> put("wsSettings", buildWsSettings(config))
+            Transport.XHTTP -> put("xhttpSettings", buildXhttpSettings(config))
             Transport.gRPC -> put("grpcSettings", buildGrpcSettings(config))
             Transport.QUIC -> put("quicSettings", buildQuicSettings(config))
             Transport.HTTP -> put("httpSettings", buildHttpTransportSettings(config))
@@ -511,10 +513,24 @@ object XrayConfigParser {
 
         return buildJsonObject {
             put("path", JsonPrimitive(path))
+            // Independent 'host' property — the old 'headers.Host' is deprecated
             if (host != null) {
-                put("headers", buildJsonObject {
-                    put("Host", JsonPrimitive(host))
-                })
+                put("host", JsonPrimitive(host))
+            }
+        }
+    }
+
+    private fun buildXhttpSettings(config: ServerConfig): JsonObject {
+        val raw = parseRawConfig(config.rawConfig)
+        val host = raw?.get("host")?.jsonPrimitive?.content
+            ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.content
+        val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
+
+        return buildJsonObject {
+            put("path", JsonPrimitive(path))
+            // XHTTP host is an array
+            if (host != null) {
+                put("host", buildJsonArray { add(JsonPrimitive(host)) })
             }
         }
     }

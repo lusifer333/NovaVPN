@@ -131,6 +131,7 @@ object SubscriptionParser {
 
             val transport = when (net.lowercase()) {
                 "ws", "websocket" -> Transport.WebSocket
+                "xhttp" -> Transport.XHTTP
                 "grpc" -> Transport.gRPC
                 "quic" -> Transport.QUIC
                 "h2", "http" -> Transport.HTTP
@@ -196,6 +197,7 @@ object SubscriptionParser {
             }
             val transport = when (net.lowercase()) {
                 "ws", "websocket" -> Transport.WebSocket
+                "xhttp" -> Transport.XHTTP
                 "grpc" -> Transport.gRPC
                 "quic" -> Transport.QUIC
                 "h2", "http" -> Transport.HTTP
@@ -304,6 +306,7 @@ object SubscriptionParser {
             }
             val transport = when (net.lowercase()) {
                 "ws", "websocket" -> Transport.WebSocket
+                "xhttp" -> Transport.XHTTP
                 "grpc" -> Transport.gRPC
                 "quic" -> Transport.QUIC
                 "h2", "http" -> Transport.HTTP
@@ -745,6 +748,7 @@ object SubscriptionParser {
 
         val transport = when (network.lowercase()) {
             "ws", "websocket" -> Transport.WebSocket
+            "xhttp" -> Transport.XHTTP
             "grpc" -> Transport.gRPC
             "quic" -> Transport.QUIC
             "h2", "http" -> Transport.HTTP

@@ -37,6 +37,7 @@ enum class Protocol(val displayName: String) {
 enum class Transport(val displayName: String) {
     TCP("TCP"),
     WebSocket("WebSocket"),
+    XHTTP("XHTTP"),
     gRPC("gRPC"),
     QUIC("QUIC"),
     HTTP("HTTP"),
