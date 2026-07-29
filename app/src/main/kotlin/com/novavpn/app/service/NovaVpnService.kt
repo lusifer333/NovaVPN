@@ -36,6 +36,7 @@ class NovaVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectionJob: Job? = null
+    private var tunHealthJob: Job? = null
 
     companion object {
         const val ACTION_START = "com.novavpn.action.START_VPN"
@@ -168,6 +169,23 @@ class NovaVpnService : VpnService() {
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
+        // Start TUN health monitor coroutine
+        tunHealthJob?.cancel()
+        tunHealthJob = serviceScope.launch {
+            var counter = 0
+            while (isActive) {
+                delay(5_000L)
+                counter++
+                val tun = tunInterface
+                val fd = tun?.fd ?: -1
+                val engineState = (engineManager.activeEngine?.state?.value)?.name ?: "unknown"
+                val rx = engineManager.activeEngine?.bytesReceived?.value ?: 0L
+                val tx = engineManager.activeEngine?.bytesSent?.value ?: 0L
+                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, engine=%s, rx=%d, tx=%d",
+                    counter, fd, engineState, rx, tx)
+            }
+        }
+
         try {
             engine.state.collect { state ->
                 if (state == EngineRuntimeState.Crashed && connectUseCase.connectionState.value == ConnectionState.Connected) {
@@ -185,6 +203,8 @@ class NovaVpnService : VpnService() {
     private suspend fun stopVpnInternal() {
         if (connectUseCase.connectionState.value == ConnectionState.Disconnected) return
         connectUseCase.updateState(ConnectionState.Disconnecting)
+        tunHealthJob?.cancel()
+        tunHealthJob = null
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
