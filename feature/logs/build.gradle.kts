@@ -29,6 +29,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:common"))
     implementation(project(":core:ui"))
+    implementation(project(":logging"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.bundles.compose)

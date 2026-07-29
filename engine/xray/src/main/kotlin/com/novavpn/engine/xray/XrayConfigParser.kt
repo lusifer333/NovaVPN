@@ -583,10 +583,19 @@ object XrayConfigParser {
     /**
      * Routing: traffic from TUN inbound gets sent to the proxy outbound.
      * SOCKS/HTTP inbounds (fallback) also route to proxy for testing.
+     * DNS traffic on port 53 is explicitly routed to proxy to prevent
+     * DNS_PROBE_POSSIBLE errors.
      */
     private fun buildRouting(): JsonObject = buildJsonObject {
         put("domainStrategy", JsonPrimitive("AsIs"))
         put("rules", buildJsonArray {
+            // Route DNS traffic through proxy
+            add(buildJsonObject {
+                put("type", JsonPrimitive("field"))
+                put("port", JsonPrimitive("53"))
+                put("outboundTag", JsonPrimitive("proxy"))
+            })
+            // Route all inbound traffic through proxy
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {

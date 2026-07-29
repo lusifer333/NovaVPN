@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.novavpn.domain.model.LogEntry
 import com.novavpn.domain.model.LogLevel
 import com.novavpn.domain.repository.LogRepository
+import com.novavpn.logging.NovaLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -19,24 +20,21 @@ data class LogsUiState(
 
 @HiltViewModel
 class LogsViewModel @Inject constructor(
-    private val logRepository: LogRepository
+    private val logRepository: LogRepository,
+    private val novaLogger: NovaLogger
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LogsUiState())
     val state: StateFlow<LogsUiState> = _state.asStateFlow()
 
     init {
-        loadLogs()
-    }
-
-    private fun loadLogs() {
+        // Collect live logs from NovaLogger (in-memory circular buffer)
         viewModelScope.launch {
-            logRepository.observe(
-                levelFilter = _state.value.filterLevel,
-                tagFilter = if (_state.value.searchQuery.isNotBlank())
-                    _state.value.searchQuery else null
-            ).collect { entries ->
-                _state.update { it.copy(entries = entries) }
+            novaLogger.logFlow.collect { entry ->
+                _state.update { current ->
+                    val newList = (current.entries + entry).takeLast(500)
+                    current.copy(entries = newList)
+                }
             }
         }
     }
