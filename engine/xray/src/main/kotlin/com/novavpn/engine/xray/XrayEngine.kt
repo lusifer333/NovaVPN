@@ -282,28 +282,92 @@ class XrayEngine @Inject constructor(
                 // 5. Start process output collector (reads stdout/stderr)
                 startOutputCollector(xrayProcess)
 
-                // 6. Give the process a moment to stabilise
-                val alive = xrayProcess.waitFor(2, TimeUnit.SECONDS)
+                // 6. Wait for Xray to initialize (check for stderr errors)
+                val initWaitMs = 3000L
+                val startTime = System.currentTimeMillis()
+                var processStillAlive = false
+                var lastOutput = ""
 
-                if (alive) {
-                    // Process is still running after the brief wait
+                while (System.currentTimeMillis() - startTime < initWaitMs) {
+                    if (!xrayProcess.isAlive) {
+                        // Process exited during init
+                        val exitCode = xrayProcess.exitValue()
+                        val errorOutput = try {
+                            xrayProcess.inputStream.bufferedReader().readText()
+                        } catch (_: Exception) { "" }
+                        Timber.tag(TAG).e("XRAY_DIED: exit=%d, output:\n%s", exitCode, errorOutput.take(1000))
+                        _state.value = EngineRuntimeState.Crashed
+                        process = null
+                        return@withLock Result.failure(
+                            EngineError(EngineError.ErrorCode.ENGINE_CRASH,
+                                "Xray exited during init (code=$exitCode): ${errorOutput.take(200)}")
+                        )
+                    }
+
+                    // Read any available output (non-blocking)
+                    try {
+                        val avail = xrayProcess.inputStream.available()
+                        if (avail > 0) {
+                            val buf = ByteArray(avail.coerceAtMost(4096))
+                            xrayProcess.inputStream.read(buf, 0, buf.size)
+                            val chunk = String(buf, Charsets.UTF_8)
+                            lastOutput += chunk
+                            // Check for fatal errors
+                            if (chunk.contains("permission denied", ignoreCase = true) ||
+                                chunk.contains("failed to start", ignoreCase = true)) {
+                                Timber.tag(TAG).w("XRAY_ERROR_DURING_INIT: %s", chunk.take(500))
+                            }
+                            // Success marker
+                            if (chunk.contains("running inbound", ignoreCase = true)) {
+                                Timber.tag(TAG).i("XRAY_INBOUND_READY: %s", chunk.take(200))
+                            }
+                        }
+                    } catch (_: Exception) { }
+
+                    Thread.sleep(100)
+                }
+
+                processStillAlive = xrayProcess.isAlive
+
+                // Store PID and alive state
+                val xrayPid = try {
+                    java.lang.reflect.Method::class.java
+                        .getDeclaredMethod("pid")
+                    null // won't work on Android
+                } catch (_: Exception) { null }
+                val pidField = try {
+                    xrayProcess.javaClass.getDeclaredField("pid")
+                    pidField.isAccessible = true
+                    pidField.getInt(xrayProcess)
+                } catch (_: Exception) { -1 }
+
+                TunDiagnostics.processArgs = "$binaryPath run -c ${tempFile.absolutePath}"
+                Timber.tag(TAG).i("XRAY_LIFECYCLE: alive=%s, pid=%d, initMs=%d, errorsInLog=%s",
+                    processStillAlive, pidField,
+                    System.currentTimeMillis() - startTime,
+                    lastOutput.contains("permission denied"))
+
+                if (processStillAlive) {
                     _state.value = EngineRuntimeState.Running
                     Timber.tag(TAG).i("XRAY_READY: rawFd=%d, inheritFd=%d, dupOK=%s",
                         rawTunFd, inheritableTunFd,
                         rawTunFd != inheritableTunFd)
+
+                    // Full stderr dump for diagnostics
+                    if (lastOutput.isNotBlank()) {
+                        Timber.tag(TAG).i("XRAY_STDERR_DUMP:\n%s", lastOutput.take(2000))
+                    }
                     Result.success(Unit)
                 } else {
-                    // Process exited immediately — capture its stderr
-                    val exitCode = xrayProcess.exitValue()
-                    val errorOutput = xrayProcess.inputStream.bufferedReader().readText()
+                    val errorOutput = try {
+                        xrayProcess.inputStream.bufferedReader().readText()
+                    } catch (_: Exception) { "" }
                     _state.value = EngineRuntimeState.Crashed
                     process = null
-                    Timber.tag(TAG).e("Xray engine exited immediately (code=%d):\n%s", exitCode, errorOutput)
+                    Timber.tag(TAG).e("XRAY_DIED_AFTER_INIT:\n%s", errorOutput.take(1000))
                     Result.failure(
-                        EngineError(
-                            code = EngineError.ErrorCode.ENGINE_CRASH,
-                            message = "Xray process exited with code $exitCode: $errorOutput"
-                        )
+                        EngineError(EngineError.ErrorCode.ENGINE_CRASH,
+                            "Xray exited: $errorOutput".take(200))
                     )
                 }
             } catch (e: Exception) {
