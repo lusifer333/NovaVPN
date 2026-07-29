@@ -224,7 +224,32 @@ class XrayEngine @Inject constructor(
                 }
                 Timber.tag(TAG).d("After chmod: executable=%s", binFile.canExecute())
 
-                // 5. Start the xray subprocess
+                // 5. Validate config with xray -test before running
+                Timber.tag(TAG).i("Running config validation: %s -test -c %s",
+                    binFile.name, tempFile.name)
+                val testProcess = ProcessBuilder(
+                    binaryPath, "-test", "-c", tempFile.absolutePath
+                ).redirectErrorStream(true).start()
+                val testOutput = try {
+                    if (testProcess.waitFor(5, TimeUnit.SECONDS)) {
+                        testProcess.inputStream.bufferedReader().readText()
+                    } else {
+                        testProcess.destroyForcibly()
+                        "Config validation timed out after 5s"
+                    }
+                } catch (e: Exception) {
+                    "Config validation failed: ${e.message}"
+                }
+                val testExitCode = try { testProcess.exitValue() } catch (_: Exception) { -1 }
+                Timber.tag(TAG).i("Config validation: exit=%d, output:\n%s",
+                    testExitCode, testOutput.take(1000))
+
+                if (testExitCode != 0 && testOutput.contains("tun", ignoreCase = true)) {
+                    Timber.tag(TAG).w("TUN inbound not supported by this Xray binary! " +
+                        "Config uses TUN fd=%d but binary rejected it.", inheritableTunFd)
+                }
+
+                // 6. Start the xray subprocess
                 val pb = ProcessBuilder(
                     binaryPath, "run", "-c", tempFile.absolutePath
                 )

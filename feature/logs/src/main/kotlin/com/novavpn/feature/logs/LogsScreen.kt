@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -99,6 +100,49 @@ fun LogsScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+            }
+
+            // Diagnostics card — shows latest DIAG lines prominently
+            val diagEntries = state.entries.filter { it.tag == "NovaVpnService" && it.message.contains("DIAG") }
+            val lastDiag = diagEntries.lastOrNull()
+            if (lastDiag != null) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Monitor, contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text("TUN Diagnostics",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        val msg = lastDiag.message
+                        // Parse DIAG components
+                        val parts = msg.split(", ")
+                        parts.forEach { part ->
+                            val color = when {
+                                part.contains("rx=0") && part.contains("tx=0") ->
+                                    StatusConnecting
+                                part.contains("fdAlive=false") -> StatusError
+                                part.contains("fdAlive=true") -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Text(part, style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = color)
+                        }
+                    }
+                }
             }
 
             // Filter chips row
