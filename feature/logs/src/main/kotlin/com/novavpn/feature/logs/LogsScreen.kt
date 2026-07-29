@@ -45,6 +45,9 @@ fun LogsScreen(
                 title = "Logs",
                 onNavigateBack = onNavigateBack,
                 actions = {
+                    IconButton(onClick = { viewModel.addTestLog() }) {
+                        Icon(Icons.Default.BugReport, contentDescription = "Test Log")
+                    }
                     IconButton(onClick = { viewModel.clearLogs() }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
                     }

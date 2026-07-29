@@ -73,6 +73,10 @@ class LogsViewModel @Inject constructor(
         }
     }
 
+    fun addTestLog() {
+        novaLogger.d("TEST_LOG_WORKING", "If you see this, the logging pipeline is working ✅")
+    }
+
     fun refreshLogCounts() {
         viewModelScope.launch {
             val counts = logRepository.countByLevel()
