@@ -185,9 +185,26 @@ class NovaVpnService : VpnService() {
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
-        // Start bridge: TUN fd → native bridge → SOCKS5 → Xray
+        // Start bridge: TUN fd → hev-socks5-tunnel → SOCKS5 → Xray
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
-        tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
+        try {
+            tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "LIFECYCLE: BRIDGE_START_FAILED → %s", e.message)
+            connectUseCase.updateState(ConnectionState.Error,
+                "Bridge failed: ${e.message}")
+            updateNotification("Bridge failed")
+            engine.stop()
+            return
+        }
+        if (tunnelBridge.status != com.novavpn.engine.api.BridgeStatus.Running) {
+            Timber.tag(TAG).e("LIFECYCLE: BRIDGE_STATUS=%s — aborting", tunnelBridge.status.name)
+            connectUseCase.updateState(ConnectionState.Error,
+                "Bridge status: ${tunnelBridge.status.name}")
+            updateNotification("Bridge failed")
+            engine.stop()
+            return
+        }
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STATUS=%s", tunnelBridge.status.name)
 
         // Start TUN health monitor coroutine

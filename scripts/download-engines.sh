@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download native VPN engine binaries for NovaVPN.
-# Binaries go to jniLibs/<abi>/lib<name>.so so they get proper
+# Binaries go to jniLibs/<abi>/ so they get proper
 # SELinux context on installation (requires extractNativeLibs=true).
 #
 # Usage:  ./scripts/download-engines.sh [arm64-v8a|armeabi-v7a|x86_64|x86]
@@ -12,6 +12,7 @@ set -euo pipefail
 ARCH="${1:-arm64-v8a}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 JNILIBS_DIR="$SCRIPT_DIR/../app/src/main/jniLibs"
+HEV_VERSION="2.16.0"
 
 echo "==> NovaVPN Engine Downloader (jniLibs target)"
 echo "    Architecture: $ARCH"
@@ -20,7 +21,7 @@ echo ""
 # Map common arch names to release filenames
 case "$ARCH" in
   arm64-v8a)   RELEASE_ARCH="arm64-v8a"  ;;
-  armeabi-v7a) RELEASE_ARCH="arm32-v7a"  ;;
+  armeabi-v7a) RELEASE_ARCH="armeabi-v7a"  ;;
   x86_64)      RELEASE_ARCH="x86_64"     ;;
   x86)         RELEASE_ARCH="x86"        ;;
   *) echo "Unknown architecture: $ARCH"; exit 1 ;;
@@ -55,37 +56,25 @@ fi
 # ------------------------------------------------------------
 # hev-socks5-tunnel  →  jniLibs/<arch>/hev-socks5-tunnel
 # TUN-to-SOCKS5 bridge binary for Android.
+# Pre-built binaries available since v2.15.0.
 # ------------------------------------------------------------
 echo ""
 echo "--- hev-socks5-tunnel ($ARCH) ---"
 
 TUNNEL_BIN="$JNILIBS_DIR/$ARCH/hev-socks5-tunnel"
 
-if [ -f "$TUNNEL_BIN" ]; then
+if [ -f "$TUNNEL_BIN" ] && [ "$(head -c 3 "$TUNNEL_BIN")" != "#!/" ]; then
   echo "  Already exists: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"
   echo "  Skipping."
 else
-  echo "  NOTE: hev-socks5-tunnel is not yet pre-built for Android."
-  echo "  Building from source requires Go + NDK cross-compilation."
-  echo "  See: https://github.com/heiher/hev-socks5-tunnel"
-  echo ""
-  echo "  For now, the bridge runs in diagnostic mode (no native binary)."
-  echo "  Place a pre-built hev-socks5-tunnel binary at:"
-  echo "    $TUNNEL_BIN"
-  echo ""
+  HEV_URL="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}/hev-socks5-tunnel-android-${RELEASE_ARCH}"
 
-  # Create a placeholder script that logs bridge status
-  cat > "$TUNNEL_BIN" << 'BRIDGE_PLACEHOLDER'
-#!/system/bin/sh
-# hev-socks5-tunnel bridge — placeholder
-# Real binary should be compiled and placed here.
-echo "hev-socks5-tunnel: diagnostic mode"
-echo "TUN fd: $1"
-echo "SOCKS5: $2:$3"
-exit 0
-BRIDGE_PLACEHOLDER
+  echo "  Downloading: $HEV_URL"
+  # Remove old placeholder if exists
+  rm -f "$TUNNEL_BIN"
+  curl -sL "$HEV_URL" -o "$TUNNEL_BIN"
   chmod +x "$TUNNEL_BIN"
-  echo "  Created placeholder: $TUNNEL_BIN"
+  echo "  Installed: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"
 fi
 
 echo ""

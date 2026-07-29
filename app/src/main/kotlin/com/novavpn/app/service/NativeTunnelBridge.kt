@@ -7,7 +7,11 @@ import com.novavpn.engine.api.TunnelBridge
 import dagger.hilt.android.qualifiers.ApplicationContext
 import timber.log.Timber
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,11 +22,15 @@ import javax.inject.Singleton
  * through a SOCKS5 proxy. It is spawned as a child process and its
  * lifecycle is managed here.
  *
- * Binary location: jniLibs/<abi>/hev-socks5-tunnel (or downloaded
- * via scripts/download-engines.sh)
+ * Binary location: jniLibs/<abi>/hev-socks5-tunnel (inside APK)
+ * The binary is bundled inside the APK under lib/<abi>/hev-socks5-tunnel
+ * and extracted at runtime if the system doesn't extract it automatically.
  *
  * Architecture:
- *   TUN → hev-socks5-tunnel → SOCKS5(127.0.0.1:10808) → Xray → outbound
+ *   TUN VpnService fd → hev-socks5-tunnel → SOCKS5(127.0.0.1:10808) → Xray → outbound
+ *
+ * IMPORTANT: If the binary is missing, start() throws — no silent diagnostic mode.
+ * The caller (NovaVpnService) must verify BridgeStatus.Running after start().
  */
 @Singleton
 class NativeTunnelBridge @Inject constructor(
@@ -32,6 +40,7 @@ class NativeTunnelBridge @Inject constructor(
     companion object {
         private const val TAG = "TunnelBridge"
         private const val BINARY_NAME = "hev-socks5-tunnel"
+        private const val BRIDGE_TIMEOUT_SEC = 5
     }
 
     override val type: String = "hev-socks5-tunnel"
@@ -66,42 +75,20 @@ class NativeTunnelBridge @Inject constructor(
         Timber.tag(TAG).i("BRIDGE_START: tunFd=%d, socks5=%s:%d", tunFd, socksHost, socksPort)
 
         try {
-            // Find binary in native library path
-            val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-            val nativeLibDir = "/data/app/${context.packageName}-/lib/$abi"
-            val possiblePaths = listOf(
-                "$nativeLibDir/lib$BINARY_NAME.so",
-                "$nativeLibDir/$BINARY_NAME",
-                context.applicationInfo.nativeLibraryDir + "/lib${BINARY_NAME}.so",
-                context.applicationInfo.nativeLibraryDir + "/$BINARY_NAME",
-                context.filesDir.parent + "/lib/$abi/lib${BINARY_NAME}.so"
-            )
-
-            binaryPath = possiblePaths.firstOrNull { File(it).exists() } ?: ""
-            Timber.tag(TAG).i("BRIDGE_BINARY_SEARCH: paths=%s, found=%s",
-                possiblePaths, if (binaryPath.isNotEmpty()) binaryPath else "NOT_FOUND")
-            Timber.tag(TAG).i("BRIDGE_BINARY_PATH: %s", if (binaryPath.isNotEmpty()) binaryPath else "MISSING")
-
-            if (binaryPath.isEmpty()) {
-                Timber.tag(TAG).w("BRIDGE_BINARY_MISSING: place %s in jniLibs/<abi>/", BINARY_NAME)
-                Timber.tag(TAG).i("BRIDGE_DIAG_MODE: no native binary, reporting diagnostics only")
-                status = BridgeStatus.Running
-                updateTunDiagnostics()
-                Timber.tag(TAG).i("BRIDGE_START_RESULT: DIAG_MODE (no binary)")
-                return
-            }
+            // Find binary — try native lib path first, then APK zip extraction
+            ensureBinary()
 
             File(binaryPath).setExecutable(true, false)
 
+            // The binary expects TUN fd and SOCKS5 proxy address
             val cmd = listOf(binaryPath, "--fd", tunFd.toString(), "--socks5", "$socksHost:$socksPort")
             Timber.tag(TAG).i("BRIDGE_COMMAND: %s", cmd.joinToString(" "))
 
             val pb = ProcessBuilder(cmd).redirectErrorStream(true)
             bridgeProcess = pb.start()
 
-            Thread.sleep(200)
-            val alive = bridgeProcess?.isAlive ?: false
-            Timber.tag(TAG).i("BRIDGE_PROCESS_ALIVE: %s", alive)
+            // Wait briefly and check if process stays alive
+            val alive = bridgeProcess?.waitFor(BRIDGE_TIMEOUT_SEC, TimeUnit.SECONDS) == false
 
             if (alive) {
                 status = BridgeStatus.Running
@@ -116,13 +103,21 @@ class NativeTunnelBridge @Inject constructor(
                 Timber.tag(TAG).i("BRIDGE_START_RESULT: FAILED (exit=%d)", exitCode)
                 status = BridgeStatus.Failed
                 bridgeProcess = null
+                throw BridgeStartException(
+                    "hev-socks5-tunnel exited immediately (code=$exitCode): ${output.take(200)}"
+                )
             }
             updateTunDiagnostics()
 
+        } catch (e: BridgeStartException) {
+            status = BridgeStatus.Failed
+            updateTunDiagnostics()
+            throw e
         } catch (e: Exception) {
             status = BridgeStatus.Failed
             Timber.tag(TAG).e(e, "BRIDGE_START_FAILED")
             updateTunDiagnostics()
+            throw BridgeStartException("hev-socks5-tunnel failed: ${e.message}", e)
         }
     }
 
@@ -132,7 +127,7 @@ class NativeTunnelBridge @Inject constructor(
         Timber.tag(TAG).i("BRIDGE_STOP")
         try {
             bridgeProcess?.destroy()
-            bridgeProcess?.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
+            bridgeProcess?.waitFor(3, TimeUnit.SECONDS)
         } catch (_: Exception) { }
         bridgeProcess = null
         status = BridgeStatus.Idle
@@ -151,9 +146,118 @@ class NativeTunnelBridge @Inject constructor(
             connectSuccess = diagConnOk.get(),
             connectFailed = diagConnFail.get(),
             processAlive = procAlive,
-            errorMessage = ""
+            errorMessage = if (status == BridgeStatus.Failed) "Bridge process not running" else ""
         )
     }
+
+    // ------------------------------------------------------------------
+    // Binary resolution
+    // ------------------------------------------------------------------
+
+    /**
+     * Locate the hev-socks5-tunnel binary. Strategy:
+     * 1. Check nativeLibraryDir (fast path if Android extracted it)
+     * 2. Extract from APK zip (always works — binary is in lib/<abi>/ inside the APK)
+     * 3. Throw FileNotFoundException if neither works
+     */
+    private fun ensureBinary() {
+        // 1. Try nativeLibraryDir (where Android extracts jniLibs)
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir ?: ""
+        val nativePath = "$nativeLibDir/$BINARY_NAME"
+        val nativeLibPath = "$nativeLibDir/lib${BINARY_NAME}.so"
+        val possiblePaths = listOf(nativePath, nativeLibPath)
+
+        for (path in possiblePaths) {
+            val file = File(path)
+            if (file.exists() && file.canExecute()) {
+                binaryPath = path
+                Timber.tag(TAG).i("BRIDGE_BINARY_FOUND: nativeLib=%s (%d KB)",
+                    path, file.length() / 1024)
+                return
+            }
+        }
+
+        // 2. Extract from APK zip (always available)
+        Timber.tag(TAG).i("BRIDGE_BINARY_NOT_IN_NATIVE_LIB — extracting from APK")
+        try {
+            binaryPath = extractFromApk()
+            val file = File(binaryPath)
+            Timber.tag(TAG).i("BRIDGE_BINARY_EXTRACTED: %s (%d KB)",
+                binaryPath, file.length() / 1024)
+            return
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "BRIDGE_BINARY_EXTRACT_FAILED")
+        }
+
+        // 3. Nothing worked — hard failure, no diagnostic mode
+        val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        val msg = buildString {
+            appendLine("hev-socks5-tunnel binary NOT FOUND!")
+            appendLine("  Looked in nativeLibraryDir: $nativeLibDir/$BINARY_NAME")
+            appendLine("  APK zip entry: lib/$abi/$BINARY_NAME")
+            appendLine("  Expected location: app/src/main/jniLibs/$abi/$BINARY_NAME")
+            appendLine("  Run: scripts/download-engines.sh")
+        }
+        Timber.tag(TAG).w(msg)
+        throw FileNotFoundException(msg)
+    }
+
+    /**
+     * Extract hev-socks5-tunnel from inside the APK zip.
+     * APK internal path: lib/<abi>/hev-socks5-tunnel
+     * Works even when extractNativeLibs="false".
+     */
+    private fun extractFromApk(): String {
+        val apkFile = File(context.applicationInfo.sourceDir)
+        val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        val entryPath = "lib/$abi/$BINARY_NAME"
+
+        // Extract to app's internal private directory
+        val targetDir = File(context.filesDir, "novavpn/bridge")
+        targetDir.mkdirs()
+        val target = File(targetDir, BINARY_NAME)
+
+        // Only extract if not already extracted or APK was updated
+        if (target.exists() && target.canExecute()) {
+            val apkMtime = apkFile.lastModified()
+            val binMtime = target.lastModified()
+            if (binMtime >= apkMtime) {
+                Timber.tag(TAG).d("BRIDGE_ALREADY_EXTRACTED: %s", target.absolutePath)
+                return target.absolutePath
+            }
+            Timber.tag(TAG).d("BRIDGE_EXTRACT_STALE: APK updated, re-extracting")
+        }
+
+        Timber.tag(TAG).i("BRIDGE_EXTRACT: from APK %s!/%s", apkFile.name, entryPath)
+
+        ZipFile(apkFile).use { zip ->
+            val entry = zip.getEntry(entryPath)
+                ?: throw FileNotFoundException(
+                    "hev-socks5-tunnel not found in APK under $entryPath. " +
+                    "Run scripts/download-engines.sh to download it."
+                )
+
+            zip.getInputStream(entry).use { input ->
+                FileOutputStream(target).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+
+        target.setExecutable(true, false)
+        try {
+            Runtime.getRuntime().exec(arrayOf("chmod", "755", target.absolutePath))
+                .waitFor(2, TimeUnit.SECONDS)
+        } catch (_: Exception) { }
+
+        val sizeKb = target.length() / 1024
+        Timber.tag(TAG).i("BRIDGE_EXTRACTED: %s (%d KB)", target.absolutePath, sizeKb)
+        return target.absolutePath
+    }
+
+    // ------------------------------------------------------------------
+    // Diagnostics
+    // ------------------------------------------------------------------
 
     private fun updateTunDiagnostics() {
         val diag = diagnostics()
@@ -173,3 +277,6 @@ class NativeTunnelBridge @Inject constructor(
     fun onConnectSuccess() { diagConnOk.incrementAndGet() }
     fun onConnectFailed() { diagConnFail.incrementAndGet() }
 }
+
+/** Thrown when the bridge binary fails to start. */
+class BridgeStartException(message: String, cause: Throwable? = null) : Exception(message, cause)

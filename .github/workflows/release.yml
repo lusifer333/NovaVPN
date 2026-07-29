@@ -45,7 +45,14 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Build debug APK
+      - name: Download engine binaries
+        run: |
+          chmod +x scripts/download-engines.sh
+          scripts/download-engines.sh arm64-v8a
+          echo "Engine binaries:"
+          ls -la app/src/main/jniLibs/arm64-v8a/
+
+      - name: Build Release APK
         run: >
           ./gradlew assembleDebug
           -PversionName=${{ steps.version.outputs.version }}

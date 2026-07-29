@@ -110,16 +110,30 @@ class XrayConfigParserTest {
     }
 
     // ------------------------------------------------------------------
-    // 5. Shared config structure
+    // 5. Shared config structure (SOCKS5 architecture — TUN is handled
+    //    by hev-socks5-tunnel bridge, NOT Xray)
     // ------------------------------------------------------------------
 
     @Test
-    fun `generated config has TUN inbound with correct fd`() {
+    fun `generated config has SOCKS5 inbound on 127-0-0-1 10808`() {
         val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""")
         val inbounds = root["inbounds"]!!.jsonArray!!
-        val tunInbound = inbounds[0]!!.jsonObject
-        assertEquals("tun", tunInbound["protocol"]!!.jsonPrimitive.content)
-        assertEquals(dummyTunFd, tunInbound["settings"]!!.jsonObject!!["fd"]!!.jsonPrimitive.content.toInt())
+        val socksInbound = inbounds[0]!!.jsonObject
+        assertEquals("socks", socksInbound["protocol"]!!.jsonPrimitive.content)
+        assertEquals("127.0.0.1", socksInbound["listen"]!!.jsonPrimitive.content)
+        assertEquals(10808, socksInbound["port"]!!.jsonPrimitive.content.toInt())
+        assertEquals("socks-in", socksInbound["tag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `generated config has HTTP inbound as fallback`() {
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""")
+        val inbounds = root["inbounds"]!!.jsonArray!!
+        val httpInbound = inbounds[1]!!.jsonObject
+        assertEquals("http", httpInbound["protocol"]!!.jsonPrimitive.content)
+        assertEquals("127.0.0.1", httpInbound["listen"]!!.jsonPrimitive.content)
+        assertEquals(10809, httpInbound["port"]!!.jsonPrimitive.content.toInt())
+        assertEquals("http-in", httpInbound["tag"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -141,15 +155,57 @@ class XrayConfigParserTest {
     }
 
     @Test
-    fun `routing routes tun-in inbound to proxy outbound`() {
+    fun `full config matches SOCKS5 architecture expected by hev-socks5-tunnel`() {
+        // This test validates the complete config structure against the
+        // hev-socks5-tunnel architecture:
+        //   TUN fd → hev-socks5-tunnel → Xray SOCKS5(:10808) → outbound
+        //
+        // Xray should NOT have a TUN inbound (TUN is handled by bridge).
+        // Xray should have SOCKS5 + HTTP inbounds for the bridge to forward to.
         val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""")
-        val rules = root["routing"]!!.jsonObject!!["rules"]!!.jsonArray!!
-        val tunInboundTags = (0 until rules.size).flatMap { ri ->
-            val tags = rules[ri]!!.jsonObject["inboundTag"]?.jsonArray ?: return@flatMap emptyList()
-            (0 until tags.size).map { tags[it]!!.jsonPrimitive.content }
+
+        // --- inbounds ---
+        val inbounds = root["inbounds"]!!.jsonArray!!
+        assertEquals("2 inbounds (SOCKS5 + HTTP)", 2, inbounds.size)
+
+        val socksIn = inbounds[0]!!.jsonObject
+        assertEquals("socks", socksIn["protocol"]!!.jsonPrimitive.content)
+        assertEquals("127.0.0.1", socksIn["listen"]!!.jsonPrimitive.content)
+        assertEquals(10808, socksIn["port"]!!.jsonPrimitive.content.toInt())
+        assertEquals("socks-in", socksIn["tag"]!!.jsonPrimitive.content)
+        assertTrue("SOCKS5 must have noauth", socksIn["settings"]!!.jsonObject["auth"]!!.jsonPrimitive.content == "noauth")
+        assertTrue("SOCKS5 must support UDP", socksIn["settings"]!!.jsonObject["udp"]!!.jsonPrimitive.content == "true")
+
+        val httpIn = inbounds[1]!!.jsonObject
+        assertEquals("http", httpIn["protocol"]!!.jsonPrimitive.content)
+        assertEquals("127.0.0.1", httpIn["listen"]!!.jsonPrimitive.content)
+        assertEquals(10809, httpIn["port"]!!.jsonPrimitive.content.toInt())
+        assertEquals("http-in", httpIn["tag"]!!.jsonPrimitive.content)
+
+        // No TUN inbound
+        val protocols = inbounds.map { it.jsonObject["protocol"]!!.jsonPrimitive.content }
+        assertFalse("TUN inbound must NOT be in Xray config", protocols.contains("tun"))
+
+        // --- outbounds ---
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        val tags = outbounds.map { it.jsonObject["tag"]!!.jsonPrimitive.content }
+        assertTrue(tags.contains("proxy"))
+        assertTrue(tags.contains("direct"))
+        assertTrue(tags.contains("block"))
+
+        // --- routing ---
+        val rules = root["routing"]!!.jsonObject["rules"]!!.jsonArray!!
+        val inboundTags = rules.flatMap { rule ->
+            val tagsArr = rule.jsonObject["inboundTag"]?.jsonArray ?: return@flatMap emptyList()
+            tagsArr.map { it.jsonPrimitive.content }
         }
-        assertTrue("tun-in inbound tag must exist", tunInboundTags.contains("tun-in"))
-        assertTrue("socks-in inbound tag must exist", tunInboundTags.contains("socks-in"))
+        assertTrue(inboundTags.contains("socks-in"))
+        assertTrue(inboundTags.contains("http-in"))
+        assertFalse(inboundTags.contains("tun-in"))
+
+        // --- dns ---
+        val dnsServers = root["dns"]!!.jsonObject["servers"]!!.jsonArray!!
+        assertTrue(dnsServers.isNotEmpty())
     }
 
     // ------------------------------------------------------------------
