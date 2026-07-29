@@ -64,8 +64,8 @@ class XrayConfigParserTest {
         val root = gen(Protocol.VMess,
             """{"add":"vmess.example.com","port":8443,"id":"uuid-vmess-5678","aid":0,"net":"ws","tls":"tls"}""")
         assertEquals("vmess", proxyOutbound(root)["protocol"]!!.jsonPrimitive.content)
-        val user = proxyOutbound(root)["settings"]!!.jsonObject!!["vnext"]!!.jsonArray!![0]!!.jsonObject
-            ["users"]!!.jsonArray!![0]!!.jsonObject
+        val vnextArr = proxyOutbound(root)["settings"]!!.jsonObject!!["vnext"]!!.jsonArray!!
+        val user = vnextArr[0]!!.jsonObject["users"]!!.jsonArray!![0]!!.jsonObject
         assertEquals("uuid-vmess-5678", user["id"]!!.jsonPrimitive.content)
     }
 
