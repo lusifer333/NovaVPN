@@ -117,6 +117,8 @@ class NovaVpnService : VpnService() {
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
+        Timber.tag(TAG).i("TUN established: fd=%d, interface=%s",
+            tun.fd, NovaConfig.VPN_SESSION_NAME)
 
         val engine = engineManager.activeEngine ?: run {
             connectUseCase.updateState(ConnectionState.Error, "No engine selected")
@@ -130,6 +132,8 @@ class NovaVpnService : VpnService() {
             override val dnsServers = listOf("8.8.8.8", "1.1.1.1")
             override val routes = listOf("0.0.0.0/0")
         }
+        Timber.tag(TAG).i("EngineContext created: tunFd=%d, dns=%s, routes=%s",
+            ctx.tunFileDescriptor, ctx.dnsServers, ctx.routes)
 
         Timber.tag(TAG).d("Initializing engine...")
         engine.initialize(ctx).onFailure { error ->

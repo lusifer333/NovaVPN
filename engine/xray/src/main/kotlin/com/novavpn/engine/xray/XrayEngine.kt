@@ -72,6 +72,12 @@ class XrayEngine @Inject constructor(
     // Internal state
     // ------------------------------------------------------------------
 
+    /** EngineContext from initialize() — stores TUN fd, DNS, routes. */
+    private var engineContext: EngineContext? = null
+
+    /** Dup'd TUN fd for the child process (FD_CLOEXEC cleared). */
+    private var tunFdForChild: Int = -1
+
     @Volatile
     private var process: Process? = null
 
@@ -101,10 +107,31 @@ class XrayEngine @Inject constructor(
 
     override suspend fun initialize(context: EngineContext): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            Timber.tag(TAG).i("Initializing Xray engine with context (tunFd=%d, dns=%s, routes=%s)",
-                context.tunFileDescriptor, context.dnsServers, context.routes)
-            // Platform-specific preparation (e.g. binary availability check)
-            // would go here in a production build.
+            // Store EngineContext for use in start()
+            engineContext = context
+
+            // Dup the TUN fd to create a version without FD_CLOEXEC
+            // so the Xray child process inherits it.
+            val rawFd = context.tunFileDescriptor
+            if (rawFd < 0) {
+                val msg = "Invalid TUN file descriptor: $rawFd"
+                Timber.tag(TAG).e(msg)
+                return@withContext Result.failure(
+                    EngineError(code = EngineError.ErrorCode.TUN_SETUP_FAILED, message = msg)
+                )
+            }
+            val dupFd = try {
+                android.system.Os.dup(rawFd)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Os.dup(%d) failed: %s — using raw fd", rawFd, e.message)
+                rawFd
+            }
+            tunFdForChild = dupFd
+
+            Timber.tag(TAG).i(
+                "Initialized: tunFd=%d (dup=%d), dns=%s, routes=%s",
+                rawFd, dupFd, context.dnsServers, context.routes
+            )
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Xray engine initialization failed")
@@ -143,9 +170,21 @@ class XrayEngine @Inject constructor(
                 val version = binaryManager.getEngineVersion(EngineType.Xray)
                 Timber.tag(TAG).i("Xray version: %s", version ?: "unknown")
 
-                // 3. Generate Xray JSON config
-                val jsonConfig = XrayConfigParser.toXrayJson(config)
-                Timber.tag(TAG).d("Generated Xray config:\\n%s", jsonConfig)
+                // 3. Generate Xray JSON config with TUN inbound
+                val ctx = engineContext
+                    ?: throw EngineError(EngineError.ErrorCode.UNKNOWN, "Engine not initialized — no EngineContext")
+                val actualTunFd = tunFdForChild
+                if (actualTunFd < 0) {
+                    throw EngineError(EngineError.ErrorCode.TUN_SETUP_FAILED, "Invalid TUN fd for child: $actualTunFd")
+                }
+                Timber.tag(TAG).i("Generating config with TUN fd=%d, dns=%s",
+                    actualTunFd, ctx.dnsServers)
+                val jsonConfig = XrayConfigParser.toXrayJson(
+                    config = config,
+                    tunFd = actualTunFd,
+                    dnsServers = ctx.dnsServers,
+                    routes = ctx.routes
+                )
 
                 // 3. Write to engine directory
                 val engineDir = binaryManager.getEngineDirectory(EngineType.Xray)
@@ -334,7 +373,7 @@ class XrayEngine @Inject constructor(
         process = null
     }
 
-    /** Remove the temporary config file. */
+    /** Remove the temporary config file + close dup'd TUN fd. */
     private fun cleanup() {
         configFile?.let {
             if (it.exists()) {
@@ -343,6 +382,18 @@ class XrayEngine @Inject constructor(
             }
         }
         configFile = null
+
+        // Close dup'd TUN fd to avoid leak
+        if (tunFdForChild >= 0) {
+            try {
+                android.system.Os.close(tunFdForChild)
+                Timber.tag(TAG).d("Closed dup'd TUN fd: %d", tunFdForChild)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Failed to close dup'd TUN fd: %s", e.message)
+            }
+            tunFdForChild = -1
+        }
+        engineContext = null
     }
 
     companion object {

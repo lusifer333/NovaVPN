@@ -14,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import timber.log.Timber
 
 /**
  * Generates valid Xray-core JSON configuration strings from [ServerConfig] domain models.
@@ -38,19 +39,31 @@ object XrayConfigParser {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
-     * Convert a [ServerConfig] into a complete Xray JSON configuration string.
+     * Convert a [ServerConfig] into a complete Xray JSON configuration string
+     * with TUN inbound for Android VPN mode.
      *
      * @param config The parsed server configuration to convert.
+     * @param tunFd The TUN interface file descriptor (from VpnService.Builder.establish()).
+     * @param dnsServers DNS server addresses to use (e.g. ["8.8.8.8", "1.1.1.1"]).
+     * @param routes Routes to forward through the VPN (e.g. ["0.0.0.0/0"]).
      * @return A pretty-printed Xray JSON string.
      */
-    fun toXrayJson(config: ServerConfig): String {
+    fun toXrayJson(
+        config: ServerConfig,
+        tunFd: Int,
+        dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1"),
+        routes: List<String> = listOf("0.0.0.0/0")
+    ): String {
         val root = buildJsonObject {
             put("log", buildLogSection())
-            put("inbounds", buildInbounds())
+            put("inbounds", buildInbounds(tunFd))
             put("outbounds", buildOutbounds(config))
             put("routing", buildRouting())
+            put("dns", buildDns(dnsServers))
         }
-        return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
+        val jsonStr = Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
+        Timber.tag(TAG).d("Generated Xray config:\n%s", jsonStr)
+        return jsonStr
     }
 
     // ------------------------------------------------------------------
@@ -68,27 +81,29 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
-     * Two local inbounds that the VPN tunnel listens on:
-     * - SOCKS5 on port 10808 (UDP enabled)
-     * - HTTP on port 10809
+     * TUN inbound that the Android VpnService feeds packets into.
+     * Uses the pre-existing TUN fd from VpnService.Builder.establish().
+     *
+     * In Xray 1.8.0+, the `tun` protocol accepts a pre-opened fd via the
+     * `fd` setting. The process must inherit this fd (use Os.dup() to
+     * clear FD_CLOEXEC before spawning the child).
      */
-    private fun buildInbounds(): JsonArray = buildJsonArray {
+    private fun buildInbounds(tunFd: Int): JsonArray = buildJsonArray {
         add(buildJsonObject {
-            put("listen", JsonPrimitive("127.0.0.1"))
-            put("port", 10808)
-            put("protocol", JsonPrimitive("socks"))
+            put("protocol", JsonPrimitive("tun"))
+            put("tag", JsonPrimitive("tun-in"))
             put("settings", buildJsonObject {
-                put("auth", JsonPrimitive("noauth"))
+                put("fd", JsonPrimitive(tunFd))
+                put("mtu", JsonPrimitive(1500))
                 put("udp", JsonPrimitive(true))
             })
-            put("tag", JsonPrimitive("socks-in"))
-        })
-        add(buildJsonObject {
-            put("listen", JsonPrimitive("127.0.0.1"))
-            put("port", 10809)
-            put("protocol", JsonPrimitive("http"))
-            put("settings", buildJsonObject { })
-            put("tag", JsonPrimitive("http-in"))
+            put("sniffing", buildJsonObject {
+                put("enabled", JsonPrimitive(true))
+                put("destOverride", buildJsonArray {
+                    add(JsonPrimitive("http"))
+                    add(JsonPrimitive("tls"))
+                })
+            })
         })
     }
 
@@ -450,9 +465,8 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
-     * Simple routing: all traffic arriving on the SOCKS or HTTP inbound
-     * gets sent to the "proxy" outbound. All other traffic bypasses the
-     * proxy (direct).
+     * Routing: all traffic arriving on the TUN inbound gets sent to the
+     * proxy outbound. All other traffic bypasses the proxy (direct).
      */
     private fun buildRouting(): JsonObject = buildJsonObject {
         put("domainStrategy", JsonPrimitive("AsIs"))
@@ -460,13 +474,26 @@ object XrayConfigParser {
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 val _inboundTags = buildJsonArray {
-                    add(JsonPrimitive("socks-in"))
-                    add(JsonPrimitive("http-in"))
+                    add(JsonPrimitive("tun-in"))
                 }
                 put("inboundTag", _inboundTags)
                 put("outboundTag", JsonPrimitive("proxy"))
             })
         })
+    }
+
+    // ------------------------------------------------------------------
+    // DNS
+    // ------------------------------------------------------------------
+
+    private fun buildDns(dnsServers: List<String>): JsonObject = buildJsonObject {
+        put("servers", buildJsonArray {
+            dnsServers.forEach { add(JsonPrimitive(it)) }
+        })
+    }
+
+    companion object {
+        private const val TAG = "XrayConfig"
     }
 
     // ------------------------------------------------------------------
