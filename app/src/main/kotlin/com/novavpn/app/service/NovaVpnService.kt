@@ -212,7 +212,7 @@ class NovaVpnService : VpnService() {
         }
 
         // ── CHECK CANCELLATION before TUN build ──
-        coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: CONNECT_STEP — building TUN for %s:%d", cfg.address, cfg.port)
 
         val tun = buildTun() ?: run {
@@ -224,7 +224,7 @@ class NovaVpnService : VpnService() {
             tun.fd, NovaConfig.VPN_SESSION_NAME)
 
         // ── CHECK CANCELLATION before engine init ──
-        coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         val engine = engineManager.activeEngine ?: run {
             connectUseCase.updateState(VpnState.Error("No engine selected"))
             updateNotification("No engine"); return
@@ -250,7 +250,7 @@ class NovaVpnService : VpnService() {
         engineStarted = true
 
         // ── CHECK CANCELLATION before engine start ──
-        coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_START")
         engine.start(cfg).onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
@@ -259,7 +259,7 @@ class NovaVpnService : VpnService() {
         }
 
         // ── CHECK CANCELLATION before waiting for running state ──
-        coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: WAITING_FOR_RUNNING")
         val running = try {
             withTimeout(30_000L) {
@@ -276,7 +276,7 @@ class NovaVpnService : VpnService() {
         }
 
         // ── CHECK CANCELLATION before bridge start ──
-        coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
         try {
             tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
