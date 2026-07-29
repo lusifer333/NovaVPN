@@ -41,12 +41,10 @@ class LogsViewModel @Inject constructor(
 
     fun onSearchQueryChange(query: String) {
         _state.update { it.copy(searchQuery = query) }
-        loadLogs()
     }
 
     fun setFilterLevel(level: LogLevel?) {
         _state.update { it.copy(filterLevel = level) }
-        loadLogs()
     }
 
     suspend fun copyLogs(): String {
