@@ -163,7 +163,9 @@ class NovaVpnService : VpnService() {
             connectUseCase.updateState(ConnectionState.Error, msg); updateNotification("Crashed"); return
         }
 
-        Timber.tag(TAG).i("VPN CONNECTED to %s via %s", cfg.name, engine.type.displayName)
+        Timber.tag(TAG).i("VPN CONNECTED to %s (%s:%d) via %s | config=%s",
+            cfg.name, cfg.address, cfg.port, engine.type.displayName,
+            configFile?.absolutePath ?: "unknown")
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
@@ -198,7 +200,13 @@ class NovaVpnService : VpnService() {
             addAddress("10.0.0.2", 32)
             addDnsServer("8.8.8.8"); addDnsServer("1.1.1.1")
             addRoute("0.0.0.0", 0); setBlocking(true)
-        }.establish()
+        }.establish().also { tun ->
+            if (tun != null) {
+                Timber.tag(TAG).i("TUN BUILT: fd=%d, mtu=1500, addr=10.0.0.2/32, " +
+                    "dns=[8.8.8.8,1.1.1.1], routes=[0.0.0.0/0], blocking=true",
+                    tun.fd)
+            }
+        }
     } catch (e: Exception) { Timber.e(e, "TUN failed"); null }
 
     private fun createNotificationChannel() {

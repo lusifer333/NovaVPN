@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
+import java.io.FileDescriptor
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -75,8 +76,11 @@ class XrayEngine @Inject constructor(
     /** EngineContext from initialize() — stores TUN fd, DNS, routes. */
     private var engineContext: EngineContext? = null
 
-    /** Dup'd TUN fd for the child process (FD_CLOEXEC cleared). */
+    /** Dup'd TUN fd for the child process (FD_CLOEXEC cleared via Os.dup). */
     private var tunFdForChild: Int = -1
+
+    /** The inheritable (dup'd) TUN fd that Xray child process actually receives. */
+    private var inheritableTunFd: Int = -1
 
     @Volatile
     private var process: Process? = null
@@ -165,15 +169,23 @@ class XrayEngine @Inject constructor(
                 // 3. Generate Xray JSON config with TUN inbound
                 val ctx = engineContext
                     ?: throw EngineError(EngineError.ErrorCode.UNKNOWN, "Engine not initialized — no EngineContext")
-                val actualTunFd = tunFdForChild
-                if (actualTunFd < 0) {
-                    throw EngineError(EngineError.ErrorCode.TUN_SETUP_FAILED, "Invalid TUN fd for child: $actualTunFd")
+                val rawTunFd = tunFdForChild
+                if (rawTunFd < 0) {
+                    throw EngineError(EngineError.ErrorCode.TUN_SETUP_FAILED, "Invalid TUN fd for child: $rawTunFd")
                 }
+
+                // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
+                // On Android 12+, ParcelFileDescriptor from VpnService.Builder has
+                // FD_CLOEXEC set, so the fd is closed in the child after fork/exec.
+                // Os.dup() creates a new fd that inherits across exec().
+                inheritableTunFd = createInheritableTunFd(rawTunFd)
+                Timber.tag(TAG).i("TUN fd: raw=%d, inheritable=%d", rawTunFd, inheritableTunFd)
+
                 Timber.tag(TAG).i("Generating config with TUN fd=%d, dns=%s",
-                    actualTunFd, ctx.dnsServers)
+                    inheritableTunFd, ctx.dnsServers)
                 val jsonConfig = XrayConfigParser.toXrayJson(
                     config = config,
-                    tunFd = actualTunFd,
+                    tunFd = inheritableTunFd,
                     dnsServers = ctx.dnsServers,
                     routes = ctx.routes
                 )
@@ -320,7 +332,7 @@ class XrayEngine @Inject constructor(
                     var line: String? = null
                     while (isActive && reader.readLine().also { line = it } != null) {
                         if (line != null) {
-                            Timber.tag(TAG).d("[engine] %s", line)
+                            Timber.tag(TAG).i("[engine] %s", line)
                             _logBuffer.add(line!!)
                         }
                     }
@@ -365,7 +377,7 @@ class XrayEngine @Inject constructor(
         process = null
     }
 
-    /** Remove the temporary config file + reset engine state. */
+    /** Remove the temporary config file + close inheritable TUN fd + reset. */
     private fun cleanup() {
         configFile?.let {
             if (it.exists()) {
@@ -374,8 +386,46 @@ class XrayEngine @Inject constructor(
             }
         }
         configFile = null
+
+        // Close the inheritable (dup'd) TUN fd — but NOT the original which
+        // is owned by NovaVpnService (tunInterface).
+        if (inheritableTunFd >= 0) {
+            try {
+                android.system.Os.close(inheritableTunFd)
+                Timber.tag(TAG).d("Closed inheritable TUN fd: %d", inheritableTunFd)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w("Failed to close inheritable TUN fd: %s", e.message)
+            }
+            inheritableTunFd = -1
+        }
+
         engineContext = null
         tunFdForChild = -1
+    }
+
+    /**
+     * Create a non-CLOEXEC copy of the TUN fd so the child (Xray) process
+     * can inherit it after fork() + exec().
+     *
+     * On Android 12+, ParcelFileDescriptor from VpnService.Builder.establish()
+     * has the FD_CLOEXEC flag set. Java's ProcessBuilder closes all CLOEXEC fds
+     * in the child before exec(), making the original TUN fd inaccessible to Xray.
+     *
+     * Os.dup() on Android (libcore) creates a new fd WITHOUT FD_CLOEXEC (POSIX
+     * guarantee). We use reflection to wrap the int fd in a FileDescriptor.
+     */
+    private fun createInheritableTunFd(rawFd: Int): Int {
+        return try {
+            val fd = FileDescriptor()
+            val field = FileDescriptor::class.java.getDeclaredField("descriptor")
+            field.isAccessible = true
+            field.setInt(fd, rawFd)
+            val duped = android.system.Os.dup(fd)
+            field.getInt(duped)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w("Os.dup failed, using raw fd: %s", e.message)
+            rawFd
+        }
     }
 
     companion object {
