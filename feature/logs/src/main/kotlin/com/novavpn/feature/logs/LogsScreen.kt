@@ -30,6 +30,7 @@ fun LogsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var showSearch by remember { mutableStateOf(false) }
+    val serviceScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         viewModel.refreshLogCounts()
@@ -46,6 +47,37 @@ fun LogsScreen(
                     }
                     IconButton(onClick = { viewModel.clearLogs() }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
+                    }
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    IconButton(onClick = {
+                        serviceScope.launch {
+                            val text = viewModel.copyLogs()
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                            context?.let {
+                                android.widget.Toast.makeText(it, "Logs copied", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                    }
+                    IconButton(onClick = {
+                        serviceScope.launch {
+                            val text = viewModel.exportLogs()
+                            // Save to Downloads
+                            val file = java.io.File(
+                                android.os.Environment.getExternalStoragePublicDirectory(
+                                    android.os.Environment.DIRECTORY_DOWNLOADS
+                                ),
+                                "NovaVPN-logs-${java.lang.System.currentTimeMillis()}.txt"
+                            )
+                            file.writeText(text)
+                            context?.let {
+                                android.widget.Toast.makeText(it, "Saved to Downloads", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) {
+                        Icon(Icons.Default.SaveAlt, contentDescription = "Export")
                     }
                 }
             )
