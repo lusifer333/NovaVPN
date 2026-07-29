@@ -356,7 +356,7 @@ private fun ConnectionCard(
             // Connect / Cancel / Disconnect button
             Button(
                 onClick = when {
-                    showDisconnect -> onDisconnect
+                    showDisconnect || showCancel -> onDisconnect
                     else -> onConnect
                 },
                 enabled = !isLoading,
