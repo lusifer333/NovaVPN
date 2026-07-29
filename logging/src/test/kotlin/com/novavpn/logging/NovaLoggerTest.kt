@@ -159,4 +159,20 @@ class NovaLoggerTest {
         assertEquals("fresh log", logs[0].message)
         assertEquals(LogLevel.Debug, logs[0].level)
     }
+
+    @Test
+    fun `clear resets shared flow replay`() = runTest {
+        // Log some entries
+        logger.i("F", "before clear")
+        logger.clear()
+        // After clear, flow should NOT replay old entries
+        val entries = mutableListOf<com.novavpn.domain.model.LogEntry>()
+        val job = launch {
+            logger.logFlow.collect { entries.add(it) }
+        }
+        delay(50)
+        // Only newly logged entries should appear
+        assertTrue("No old entries should replay after clear", entries.isEmpty())
+        job.cancel()
+    }
 }

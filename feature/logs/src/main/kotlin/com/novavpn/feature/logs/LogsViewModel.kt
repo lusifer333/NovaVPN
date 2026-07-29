@@ -69,6 +69,8 @@ class LogsViewModel @Inject constructor(
 
     fun clearLogs() {
         novaLogger.clear()
+        // Also clear the ViewModel's local state immediately
+        _state.update { it.copy(entries = emptyList(), rawLogText = "") }
     }
 
     fun addTestLog() {
