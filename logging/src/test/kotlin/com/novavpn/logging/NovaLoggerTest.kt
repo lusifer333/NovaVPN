@@ -78,7 +78,7 @@ class NovaLoggerTest {
     @Test
     fun `flow emits every log entry`() = runTest {
         val emitted = mutableListOf<com.novavpn.domain.model.LogEntry>()
-        val job = kotlinx.coroutines.launch {
+        val job = launch {
             logger.logFlow.collect { emitted.add(it) }
         }
         logger.i("Flow", "one")
