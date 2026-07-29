@@ -233,9 +233,13 @@ object SubscriptionParser {
             params["sni"]?.let { put("sni", JsonPrimitive(it)) }
             params["serverName"]?.let { put("serverName", JsonPrimitive(it)) }
             params["fingerprint"]?.let { put("fingerprint", JsonPrimitive(it)) }
+            params["fp"]?.let { put("fingerprint", JsonPrimitive(it)) }
             params["publicKey"]?.let { put("publicKey", JsonPrimitive(it)) }
+            params["pbk"]?.let { put("publicKey", JsonPrimitive(it)) }
             params["shortId"]?.let { put("shortId", JsonPrimitive(it)) }
+            params["sid"]?.let { put("shortId", JsonPrimitive(it)) }
             params["spiderX"]?.let { put("spiderX", JsonPrimitive(it)) }
+            params["spx"]?.let { put("spiderX", JsonPrimitive(it)) }
             // Transport fields
             params["path"]?.let { put("path", JsonPrimitive(it)) }
             params["host"]?.let { put("host", JsonPrimitive(it)) }
@@ -329,9 +333,13 @@ object SubscriptionParser {
             params["sni"]?.let { put("sni", JsonPrimitive(it)) }
             params["serverName"]?.let { put("serverName", JsonPrimitive(it)) }
             params["fingerprint"]?.let { put("fingerprint", JsonPrimitive(it)) }
+            params["fp"]?.let { put("fingerprint", JsonPrimitive(it)) }
             params["publicKey"]?.let { put("publicKey", JsonPrimitive(it)) }
+            params["pbk"]?.let { put("publicKey", JsonPrimitive(it)) }
             params["shortId"]?.let { put("shortId", JsonPrimitive(it)) }
+            params["sid"]?.let { put("shortId", JsonPrimitive(it)) }
             params["spiderX"]?.let { put("spiderX", JsonPrimitive(it)) }
+            params["spx"]?.let { put("spiderX", JsonPrimitive(it)) }
             params["path"]?.let { put("path", JsonPrimitive(it)) }
             params["host"]?.let { put("host", JsonPrimitive(it)) }
             params["serviceName"]?.let { put("serviceName", JsonPrimitive(it)) }
