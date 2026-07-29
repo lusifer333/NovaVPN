@@ -31,6 +31,7 @@ class NovaVpnService : VpnService() {
     @Inject lateinit var engineManager: EngineManager
     @Inject lateinit var connectUseCase: ConnectUseCase
     @Inject lateinit var serverRepository: com.novavpn.domain.repository.ServerRepository
+    @Inject lateinit var tunnelBridge: NativeTunnelBridge
 
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
@@ -184,6 +185,11 @@ class NovaVpnService : VpnService() {
         connectUseCase.updateState(ConnectionState.Connected)
         updateNotification("Connected")
 
+        // Start bridge: TUN fd → native bridge → SOCKS5 → Xray
+        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
+        tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
+        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STATUS=%s", tunnelBridge.status.name)
+
         // Start TUN health monitor coroutine
         tunHealthJob?.cancel()
         tunHealthJob = serviceScope.launch {
@@ -215,6 +221,12 @@ class NovaVpnService : VpnService() {
                         com.novavpn.domain.model.TunDiagnostics.socks5Listening = false
                     }
                 }
+
+                val bridgeDiag = tunnelBridge.diagnostics()
+                com.novavpn.domain.model.TunDiagnostics.bridgeRunning = bridgeDiag.processAlive
+                com.novavpn.domain.model.TunDiagnostics.bridgePackets = bridgeDiag.forwardedPackets
+                com.novavpn.domain.model.TunDiagnostics.bridgeBytes = bridgeDiag.forwardedBytes
+                com.novavpn.domain.model.TunDiagnostics.bridgeErrors = bridgeDiag.forwardErrors
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
                     "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d, " +
@@ -259,6 +271,8 @@ class NovaVpnService : VpnService() {
         tunHealthJob = null
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_STOP")
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
+        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STOP")
+        try { tunnelBridge.stop() } catch (_: Exception) { }
         Timber.tag(TAG).i("LIFECYCLE: TUN_CLOSE")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
