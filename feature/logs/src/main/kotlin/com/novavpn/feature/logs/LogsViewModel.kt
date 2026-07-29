@@ -15,7 +15,8 @@ data class LogsUiState(
     val entries: List<LogEntry> = emptyList(),
     val filterLevel: LogLevel? = null,
     val searchQuery: String = "",
-    val logCounts: Map<LogLevel, Int> = emptyMap()
+    val logCounts: Map<LogLevel, Int> = emptyMap(),
+    val rawLogText: String = ""
 )
 
 @HiltViewModel
@@ -28,12 +29,23 @@ class LogsViewModel @Inject constructor(
     val state: StateFlow<LogsUiState> = _state.asStateFlow()
 
     init {
-        // Collect live logs from NovaLogger (in-memory circular buffer)
+        // 1. Load existing buffer in one batch (prevents flash from 1000 replay items)
+        val existing = novaLogger.getRecent(500)
+        val rawText = existing.joinToString("\n") { entry ->
+            "[${entry.level.name.uppercase()}] ${entry.tag}: ${entry.message}"
+        }
+        _state.update { it.copy(entries = existing, rawLogText = rawText) }
+
+        // 2. Collect new log entries as they arrive
         viewModelScope.launch {
             novaLogger.logFlow.collect { entry ->
                 _state.update { current ->
                     val newList = (current.entries + entry).takeLast(500)
-                    current.copy(entries = newList)
+                    val newRaw = if (current.rawLogText.length < 500_000) {
+                        val line = "[${entry.level.name.uppercase()}] ${entry.tag}: ${entry.message}"
+                        (current.rawLogText + "\n" + line).takeLast(50_000)
+                    } else current.rawLogText
+                    current.copy(entries = newList, rawLogText = newRaw)
                 }
             }
         }

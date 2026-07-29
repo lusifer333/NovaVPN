@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.novavpn.domain.model.LogEntry
 import com.novavpn.domain.model.LogLevel
@@ -34,12 +36,8 @@ fun LogsScreen(
     viewModel: LogsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    var showSearch by remember { mutableStateOf(false) }
     val serviceScope = rememberCoroutineScope()
-
-    LaunchedEffect(Unit) {
-        viewModel.refreshLogCounts()
-    }
+    var selectedTab by remember { mutableStateOf(0) } // 0=Diagnostics, 1=Program Logs
 
     Scaffold(
         topBar = {
@@ -47,37 +45,18 @@ fun LogsScreen(
                 title = "Logs",
                 onNavigateBack = onNavigateBack,
                 actions = {
-                    IconButton(onClick = { showSearch = !showSearch }) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
-                    }
                     IconButton(onClick = { viewModel.clearLogs() }) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
                     }
                     val clipboard = LocalClipboardManager.current
-                    val context = LocalContext.current
                     IconButton(onClick = {
                         serviceScope.launch {
-                            val text = viewModel.copyLogs()
+                            val text = if (selectedTab == 0) viewModel.copyLogs()
+                                else state.rawLogText
                             clipboard.setText(AnnotatedString(text))
-                            android.widget.Toast.makeText(context, "Logs copied", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }) {
                         Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
-                    }
-                    IconButton(onClick = {
-                        serviceScope.launch {
-                            val text = viewModel.exportLogs()
-                            val file = java.io.File(
-                                android.os.Environment.getExternalStoragePublicDirectory(
-                                    android.os.Environment.DIRECTORY_DOWNLOADS
-                                ),
-                                "NovaVPN-logs-${java.lang.System.currentTimeMillis()}.txt"
-                            )
-                            file.writeText(text)
-                            android.widget.Toast.makeText(context, "Saved to Downloads", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }) {
-                        Icon(Icons.Default.SaveAlt, contentDescription = "Export")
                     }
                 }
             )
@@ -88,127 +67,165 @@ fun LogsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Search bar
-            if (showSearch) {
-                OutlinedTextField(
-                    value = state.searchQuery,
-                    onValueChange = { viewModel.onSearchQueryChange(it) },
-                    placeholder = { Text("Search logs...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
-
-            // Diagnostics card — shows latest DIAG lines prominently
-            val diagEntries = state.entries.filter { it.tag == "NovaVpnService" && it.message.contains("DIAG") }
-            val lastDiag = diagEntries.lastOrNull()
-            if (lastDiag != null) {
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Monitor, contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(8.dp))
-                            Text("TUN Diagnostics",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        val msg = lastDiag.message
-                        // Parse DIAG components
-                        val parts = msg.split(", ")
-                        parts.forEach { part ->
-                            val color = when {
-                                part.contains("rx=0") && part.contains("tx=0") ->
-                                    StatusConnecting
-                                part.contains("fdAlive=false") -> StatusError
-                                part.contains("fdAlive=true") -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                            Text(part, style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = color)
-                        }
-                    }
-                }
-            }
-
-            // Filter chips row
+            // Tab buttons
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilterChip(
-                    selected = state.filterLevel == null,
-                    onClick = { viewModel.setFilterLevel(null) },
-                    label = {
-                        Text("All (${state.logCounts.values.sum()})")
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    label = { Text("Diagnostics") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Monitor, contentDescription = null, Modifier.size(18.dp))
                     }
                 )
-                LogLevel.entries.forEach { level ->
-                    val count = state.logCounts[level] ?: 0
-                    FilterChip(
-                        selected = state.filterLevel == level,
-                        onClick = { viewModel.setFilterLevel(level) },
-                        label = { Text("${level.name} ($count)") }
-                    )
-                }
+                FilterChip(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    label = { Text("Program Logs") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Terminal, contentDescription = null, Modifier.size(18.dp))
+                    }
+                )
             }
 
-            Divider()
+            when (selectedTab) {
+                0 -> DiagnosticsTab(state)
+                1 -> ProgramLogsTab(state)
+            }
+        }
+    }
+}
 
-            // Log entries list
-            val listState = rememberLazyListState()
-            val entries = state.entries
-
-            if (entries.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Terminal,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = "No logs yet",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+@Composable
+private fun DiagnosticsTab(state: LogsUiState) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        // Diagnostics card — latest DIAG lines
+        val diagEntries = state.entries.filter { it.tag == "NovaVpnService" && it.message.contains("DIAG") }
+        val lastDiag = diagEntries.lastOrNull()
+        if (lastDiag != null) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Monitor, contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("TUN Diagnostics",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    val parts = lastDiag.message.split(", ")
+                    parts.forEach { part ->
+                        val color = when {
+                            part.contains("rx=0") && part.contains("tx=0") -> StatusConnecting
+                            part.contains("fdAlive=false") -> StatusError
+                            part.contains("fdAlive=true") -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        Text(part, style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace, color = color)
                     }
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp)
-                ) {
-                    items(
-                        items = entries,
-                        key = { it.id }
-                    ) { entry ->
-                        LogEntryItem(entry = entry)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Config validation result
+        val configEntries = state.entries.filter { it.message.contains("Config validation") }
+        val lastConfig = configEntries.lastOrNull()
+        if (lastConfig != null) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Description, contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Config Validation",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold)
                     }
+                    Spacer(Modifier.height(4.dp))
+                    Text(lastConfig.message.take(300),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 10, overflow = TextOverflow.Ellipsis)
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Detailed log list
+        Text("Recent Logs",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(vertical = 4.dp))
+
+        val listState = rememberLazyListState()
+        if (state.entries.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No logs yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 8.dp)
+            ) {
+                items(items = state.entries.takeLast(200), key = { it.id }) { entry ->
+                    LogEntryItem(entry)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgramLogsTab(state: LogsUiState) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        if (state.rawLogText.isBlank()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No logs yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            val scrollState = rememberScrollState()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+            ) {
+                Text(
+                    text = state.rawLogText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
@@ -226,58 +243,24 @@ private fun LogEntryItem(entry: LogEntry) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 1.dp),
         verticalAlignment = Alignment.Top
     ) {
-        // Timestamp
-        Text(
-            text = formatTimestamp(entry.timestamp),
+        Text(entry.level.name.take(4),
             style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.width(70.dp)
-        )
-
-        // Level tag
-        Text(
-            text = entry.level.name.take(4),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            color = levelColor,
-            modifier = Modifier.width(36.dp)
-        )
-
-        // Tag
-        Text(
-            text = entry.tag,
+            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
+            color = levelColor, modifier = Modifier.width(32.dp))
+        Text(entry.tag,
             style = MaterialTheme.typography.labelSmall,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(60.dp)
-        )
-
-        Spacer(Modifier.width(4.dp))
-
-        // Message
-        Text(
-            text = entry.message,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(56.dp))
+        Text(entry.message,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f))
     }
-}
-
-private fun formatTimestamp(timestamp: Long): String {
-    if (timestamp <= 0L) return "--:--:--"
-    val sec = (timestamp / 1000) % 60
-    val min = (timestamp / 60000) % 60
-    val hour = (timestamp / 3600000) % 24
-    return "%02d:%02d:%02d".format(hour, min, sec)
 }
