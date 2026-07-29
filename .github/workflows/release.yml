@@ -67,15 +67,11 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            - **Fixed:** Engine binary not found at runtime
-              - Root cause: AGP default `extractNativeLibs=false` prevented jniLibs
-                `.so` files from being extracted to `nativeLibraryDir` at install time
-              - Fix: Added `android:extractNativeLibs="true"` to AndroidManifest.xml
-            - **Added:** APK-zip direct extraction as last-resort binary fallback
-              - Reads `lib/<abi>/lib<engine>.so` directly from installed APK zip
-              - Works regardless of `extractNativeLibs` setting
-            - **Reduced:** APK size from 85MB to ~30MB
-              - Removed sing-box binary (52MB), kept only Xray-core (33MB)
+            - **Fixed:** Permission denied (error=13) on engine execution
+              - Root cause: `copyToEngineDir()` copied binary from `nativeLibraryDir`
+                to `filesDir`, stripping the `apk_data_file` SELinux context needed
+                for `execve()` permission
+              - Fix: execute directly from `nativeLibraryDir`, never copy to `filesDir`
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
