@@ -7,6 +7,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import timber.log.Timber
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -89,8 +92,59 @@ class AndroidBinaryManager @Inject constructor(
             }
 
             // 3. Fallback: extract from assets
-            extractFromAssets(type)
+            try {
+                return@runCatching extractFromAssets(type)
+            } catch (e: FileNotFoundException) {
+                Timber.tag(TAG).w("Assets fallback failed: %s", e.message)
+            }
+
+            // 4. Last resort: read .so directly from installed APK zip
+            // Works even without extractNativeLibs
+            return@runCatching extractFromApkZip(type)
         }
+    }
+
+    /**
+     * Fourth fallback: read .so file directly from the installed APK zip.
+     * This works even when extractNativeLibs="false" (AGP default).
+     *
+     * APK internal path: lib/<abi>/lib<name>.so
+     */
+    private fun extractFromApkZip(type: EngineType): String {
+        val apkFile = File(context.applicationInfo.sourceDir)
+        val libName = "${libPrefix}${type.name.lowercase()}.so"
+        val entryPath = "lib/$abi/$libName"
+        val target = binaryFile(type)
+        target.parentFile?.mkdirs()
+
+        Timber.tag(TAG).i("Extracting engine from APK zip: %s!/%s", apkFile.name, entryPath)
+
+        ZipFile(apkFile).use { zip ->
+            val entry: ZipEntry = zip.getEntry(entryPath)
+                ?: throw FileNotFoundException(buildString {
+                    appendLine("Engine binary not found in APK zip!")
+                    appendLine("  APK: ${apkFile.absolutePath}")
+                    appendLine("  Entry: $entryPath")
+                    appendLine("  Also tried nativeLibraryDir: ${context.applicationInfo.nativeLibraryDir}/$libName")
+                    appendLine("  Run: scripts/download-engines.sh")
+                })
+
+            zip.getInputStream(entry).use { input ->
+                FileOutputStream(target).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+
+        target.setExecutable(true, false)
+        try {
+            Runtime.getRuntime().exec(arrayOf("chmod", "755", target.absolutePath))
+                .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: Exception) { }
+
+        val sizeKb = target.length() / 1024
+        Timber.tag(TAG).i("Engine extracted from APK zip: %s (%d KB)", target.absolutePath, sizeKb)
+        return target.absolutePath
     }
 
     override fun getEngineDirectory(type: EngineType): File {
