@@ -70,6 +70,19 @@ class NovaLogger @Inject constructor() {
         append(entry)
     }
 
+    /**
+     * Generic log method for use by [NovaLoggerTree].
+     * Maps Android log priority to [LogLevel] and forwards to the buffer.
+     */
+    fun log(level: LogLevel, tag: String, message: String) {
+        when (level) {
+            LogLevel.Debug -> d(tag, message)
+            LogLevel.Info -> i(tag, message)
+            LogLevel.Warning -> w(tag, message)
+            LogLevel.Error -> e(tag, message)
+        }
+    }
+
     // ------------------------------------------------------------------
     // Convenience methods (use NOVA_TAG)
     // ------------------------------------------------------------------
