@@ -67,11 +67,18 @@ jobs:
             ## NovaVPN ${{ steps.version.outputs.version }}
 
             ### Changes
-            - **Fixed:** Permission denied (error=13) on engine execution
-              - Root cause: `copyToEngineDir()` copied binary from `nativeLibraryDir`
-                to `filesDir`, stripping the `apk_data_file` SELinux context needed
-                for `execve()` permission
-              - Fix: execute directly from `nativeLibraryDir`, never copy to `filesDir`
+            - **Fixed:** No internet traffic through VPN tunnel
+              - Root cause: Xray config only had SOCKS/HTTP local inbounds but
+                no TUN inbound — TUN interface was created but Xray never read
+                packets from it
+              - Fix: Xray config now has a `tun` protocol inbound with the
+                pre-existing TUN fd from VpnService.Builder.establish()
+            - **Added:** TUN fd is dup'd (Os.dup) with FD_CLOEXEC cleared so
+              the Xray child process inherits it
+            - **Added:** DNS server section in Xray config
+            - **Added:** Detailed logging for TUN + EngineContext creation
+            - **Fixed:** XrayEngine.initialize() now stores EngineContext
+              instead of discarding it after logging
 
             ### Download
             - **Debug APK**: `NovaVPN-${{ steps.version.outputs.version }}-debug.apk`
