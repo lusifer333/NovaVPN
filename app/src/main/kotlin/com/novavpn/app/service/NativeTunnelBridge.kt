@@ -162,8 +162,30 @@ class NativeTunnelBridge @Inject constructor(
         updateTunDiagnostics()
     }
 
+    /** Captured exit code from nativeWaitFor when bridge dies. -1 if alive or unknown. */
+    @Volatile
+    var capturedExitCode: Int = -1
+        private set
+
     override fun diagnostics(): BridgeDiagnostics {
-        val procAlive = bridgePid > 0 && NativeBridgeRunner.nativeIsAlive(bridgePid) == 1
+        val (procAlive, exitCode, errorMsg) = if (bridgePid > 0) {
+            val result = NativeBridgeRunner.nativeWaitFor(bridgePid, 0)
+            when (result) {
+                -2 -> Triple(true, -1, "")
+                -1 -> Triple(false, -1, "Bridge process already reaped (ECHILD)")
+                else -> {
+                    capturedExitCode = result
+                    val msg = if (result > 128) {
+                        "Bridge killed by signal ${result - 128} (exit=$result)"
+                    } else {
+                        "Bridge exited with code $result"
+                    }
+                    Triple(false, result, msg)
+                }
+            }
+        } else {
+            Triple(false, -1, "Bridge not started")
+        }
         return BridgeDiagnostics(
             status = status,
             forwardedPackets = diagPackets.get(),
@@ -173,7 +195,7 @@ class NativeTunnelBridge @Inject constructor(
             connectSuccess = diagConnOk.get(),
             connectFailed = diagConnFail.get(),
             processAlive = procAlive,
-            errorMessage = if (status == BridgeStatus.Failed) "Bridge process not running" else ""
+            errorMessage = errorMsg
         )
     }
 
