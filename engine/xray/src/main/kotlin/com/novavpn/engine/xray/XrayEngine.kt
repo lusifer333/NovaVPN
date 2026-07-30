@@ -390,7 +390,9 @@ class XrayEngine @Inject constructor(
      * `Thread.sleep()`, so a cancelled coroutine exits immediately.
      */
     private suspend fun awaitXrayReady(xrayProcess: Process): ReadyResult {
-        val initWaitMs = 3000L
+        // Android ARM64 can take 5-8 seconds for Xray init (geo file loading, JIT warmup).
+        // 3000ms was too tight — bumped to 8000ms.
+        val initWaitMs = 8000L
         val startTime = System.currentTimeMillis()
         var lastOutput = ""
 
