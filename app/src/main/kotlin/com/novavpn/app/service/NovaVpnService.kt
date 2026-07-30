@@ -75,7 +75,7 @@ class NovaVpnService : VpnService() {
     private val connectMutex = Mutex()
 
     /** Connection timeout — if the entire connect() exceeds this, teardown triggers. */
-    private val connectionTimeoutMs = 15_000L
+    private val connectionTimeoutMs = 60_000L
 
     /** Tracks whether engine / bridge have been started (for precise teardown). */
     private var engineStarted = false
@@ -597,6 +597,8 @@ class NovaVpnService : VpnService() {
             addAddress("10.0.0.2", 32)
             addDnsServer("8.8.8.8"); addDnsServer("1.1.1.1")
             addRoute("0.0.0.0", 0); setBlocking(true)
+            // Exclude our own app from VPN to prevent routing loopback
+            addDisallowedApplication(packageName)
             // Explicitly NOT intercepting IPv6 — pass-through only
         }.establish().also { tun ->
             if (tun != null) {
