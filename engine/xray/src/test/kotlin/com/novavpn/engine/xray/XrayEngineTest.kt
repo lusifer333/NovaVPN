@@ -22,6 +22,9 @@ class XrayEngineTest {
     @MockK
     private lateinit var binaryManager: com.novavpn.engine.api.BinaryManager
 
+    @MockK
+    private lateinit var appContext: android.content.Context
+
     private lateinit var engine: XrayEngine
 
     private val validConfig = ServerConfig(
@@ -46,7 +49,7 @@ class XrayEngineTest {
     @Before
     fun setUp() {
         MockKAnnotations.init(this, relaxed = true)
-        engine = XrayEngine(binaryManager)
+        engine = XrayEngine(binaryManager, appContext)
     }
 
     @Test
