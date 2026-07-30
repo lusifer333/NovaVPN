@@ -436,9 +436,11 @@ class NovaVpnService : VpnService() {
 
                 // If the bridge died, dump its captured stderr/stdout to Logcat
                 if (!bridgeDiag.processAlive) {
-                    val crashLog = tunnelBridge.readCrashLogContents()
-                    if (crashLog != null) {
-                        android.util.Log.e("TunnelBridge", "CRASH CAUSE:\n$crashLog")
+                    val crashLogFile = java.io.File(cacheDir, "novavpn/bridge/hev_bridge_crash.log")
+                    if (crashLogFile.exists()) {
+                        android.util.Log.e("TunnelBridge", "CRASH CAUSE:\n" + crashLogFile.readText())
+                    } else {
+                        android.util.Log.e("TunnelBridge", "CRASH CAUSE: Log file does not exist!")
                     }
                 }
             }
