@@ -579,7 +579,8 @@ class XrayEngine @Inject constructor(
 
         // Close the inheritable (dup'd) TUN fd — but NOT the original which
         // is owned by NovaVpnService (tunInterface).
-        if (inheritableTunFd >= 0) {
+        // Only close the dup'd fd if it's actually different from the original.
+        if (inheritableTunFd >= 0 && inheritableTunFd != tunFdForChild) {
             try {
                 closeFd(inheritableTunFd)
                 Timber.tag(TAG).d("Closed inheritable TUN fd: %d", inheritableTunFd)
