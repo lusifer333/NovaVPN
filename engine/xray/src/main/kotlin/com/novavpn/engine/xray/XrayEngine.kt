@@ -327,7 +327,7 @@ class XrayEngine @Inject constructor(
                             "Xray died during init (code=$exitCode): ${errorOutput.take(200)}"
                         }
                         ReadyResult.TIMEOUT -> {
-                            "Xray did NOT emit 'running inbound' within init window — killing"
+                            "Xray did NOT emit startup marker within init window — killing"
                         }
                         else -> "Xray init cancelled by Cancel/Timeout"
                     }
@@ -379,7 +379,8 @@ class XrayEngine @Inject constructor(
     private enum class ReadyResult { READY, DIED, TIMEOUT, CANCELLED }
 
     /**
-     * Wait up to [INIT_WAIT_MS] for Xray to emit its "running inbound" marker.
+     * Wait up to [INIT_WAIT_MS] for Xray to emit its startup marker
+     * ("Xray ... started" or "listening TCP on").
      *
      * Cancellation-safe: uses [delay] and [ensureActive] instead of
      * `Thread.sleep()`, so a cancelled coroutine exits immediately.
@@ -390,7 +391,7 @@ class XrayEngine @Inject constructor(
         var lastOutput = ""
 
         while (System.currentTimeMillis() - startTime < initWaitMs) {
-            // 🎯 CANCELLATION CHECKPOINT — this is why we use delay, not Thread.sleep
+            // CANCELLATION CHECKPOINT — this is why we use delay, not Thread.sleep
             currentCoroutineContext().ensureActive()
 
             if (!xrayProcess.isAlive) {
@@ -417,9 +418,12 @@ class XrayEngine @Inject constructor(
                         Timber.tag(TAG).w("XRAY_ERROR_DURING_INIT: %s", chunk.take(500))
                     }
 
-                    // ✅ SUCCESS MARKER — Xray confirmed it's running
-                    if (chunk.contains("running inbound", ignoreCase = true)) {
-                        Timber.tag(TAG).i("XRAY_INBOUND_READY: %s", chunk.take(200))
+                    // SUCCESS MARKER — Xray v26+ confirms it's running
+                    // In v26 the markers changed from "running inbound" to
+                    // "Xray ... started" / "listening TCP on ..."
+                    if ((chunk.contains("started", ignoreCase = true) && chunk.contains("Xray", ignoreCase = true)) ||
+                        chunk.contains("listening TCP", ignoreCase = true)) {
+                        Timber.tag(TAG).i("XRAY_READY: %s", chunk.take(200))
                         if (lastOutput.isNotBlank()) {
                             Timber.tag(TAG).i("XRAY_STDERR_DUMP:\n%s", lastOutput.take(2000))
                         }
@@ -428,13 +432,13 @@ class XrayEngine @Inject constructor(
                 }
             } catch (_: Exception) { }
 
-            // 🎯 CANCELLATION SAFE — delay respects coroutine cancellation
+            // CANCELLATION SAFE — delay respects coroutine cancellation
             // Using delay(100) instead of Thread.sleep(100) ensures that
             // cancellation exceptions propagate immediately.
             delay(100)
         }
 
-        // Timeout — process is still alive but never emitted "running inbound"
+        // Timeout — process is still alive but never emitted startup marker
         Timber.tag(TAG).w("XRAY_INIT_TIMEOUT: process alive, lastOutput=\n%s",
             lastOutput.take(1000))
         return ReadyResult.TIMEOUT
@@ -643,7 +647,7 @@ class XrayEngine @Inject constructor(
     companion object {
         private const val TAG = "XrayEngine"
 
-        /** How long (ms) to wait for Xray to emit its "running inbound" marker. */
+        /** How long (ms) to wait for Xray to emit its startup marker. */
         private const val INIT_WAIT_MS = 3000L
     }
 }
