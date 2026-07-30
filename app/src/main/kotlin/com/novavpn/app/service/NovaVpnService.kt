@@ -599,17 +599,18 @@ class NovaVpnService : VpnService() {
             addRoute("0.0.0.0", 0); setBlocking(true)
             // Exclude our own app from VPN to prevent routing loopback
             addDisallowedApplication(packageName)
-            // Explicitly NOT intercepting IPv6 — pass-through only
+            // Force IPv6 into the tunnel — modern cell networks prefer IPv6
+            addAddress("2606:4700:4700::1111", 128)
+            addRoute("::", 0)
         }.establish().also { tun ->
             if (tun != null) {
                 val fd = tun.fd
                 val fdValid = fd >= 0
                 val fileDesc = tun.fileDescriptor
                 Timber.tag(TAG).i("TUN BUILT: fd=%d, fdValid=%s, fileDesc=%s, " +
-                    "mtu=1500, addr=10.0.0.2/32, " +
+                    "mtu=1500, addr=10.0.0.2/32 + 2606:4700:4700::1111/128, " +
                     "dns=[8.8.8.8,1.1.1.1], " +
-                    "routes=[0.0.0.0/0 (IPv4 only)], " +
-                    "ipv6=pass-through (no ::/0 route), " +
+                    "routes=[0.0.0.0/0 + ::/0 (IPv4+IPv6)], " +
                     "blocking=true, session=%s",
                     fd, fdValid,
                     if (fileDesc != null) "valid" else "null",

@@ -112,6 +112,11 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
          * CLOEXEC anyway, so this is purely defensive. */
         fcntl(tunFd, F_SETFD, 0);
 
+        /* Set O_NONBLOCK — hev-socks5-tunnel uses epoll and will
+         * deadlock if given a blocking file descriptor. */
+        int tflags = fcntl(tunFd, F_GETFL, 0);
+        fcntl(tunFd, F_SETFL, tflags | O_NONBLOCK);
+
         /* Replace process image with the bridge binary */
         execv(binary, argv);
 
@@ -130,24 +135,22 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
 /* ───────────────────────────────────────────────────────────────────────────
  * JNI: nativeIsAlive
  *
- * Checks process existence via kill(pid, 0) — does NOT reap the child
- * (status stays available for nativeWaitFor).
+ * Checks whether a child process is still alive using waitpid(WNOHANG).
+ * Reaps the child status — once a process has exited, subsequent calls
+ * return 0.
  *
  * Returns:
- *   1  – process is alive (still running, possibly zombie)
- *   0  – process has exited / no such process
- *  -1  – error
+ *   1  – process is still running
+ *   0  – process has exited (or was already reaped)
  */
 JNIEXPORT jint JNICALL
 Java_com_novavpn_app_service_NativeBridgeRunner_nativeIsAlive(
     JNIEnv *env, jclass clazz, jint pid) {
 
     if (pid <= 0) return 0;
-
-    int rc = kill((pid_t)pid, 0);
-    if (rc == 0) return 1;           /* alive */
-    if (errno == ESRCH) return 0;    /* no such process (exited) */
-    return -1;                       /* EPERM etc — unexpected */
+    int status;
+    pid_t result = waitpid((pid_t)pid, &status, WNOHANG);
+    return (result == 0) ? 1 : 0;   /* 1 = alive, 0 = dead */
 }
 
 /* ───────────────────────────────────────────────────────────────────────────

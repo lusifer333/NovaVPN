@@ -35,8 +35,8 @@ object NativeBridgeRunner {
 
     /**
      * Check whether a child process is still alive.
-     * Uses kill(pid, 0) — does NOT reap the child.
-     * @return 1 = alive, 0 = exited/reaped, -1 = error
+     * Uses waitpid(WNOHANG) — reaps the child on first call.
+     * @return 1 = alive, 0 = exited/reaped
      */
     external fun nativeIsAlive(pid: Int): Int
 
