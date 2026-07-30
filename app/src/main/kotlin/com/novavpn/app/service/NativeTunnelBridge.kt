@@ -124,17 +124,14 @@ class NativeTunnelBridge @Inject constructor(
                 // Reap exit status via waitpid
                 val exitCode = reapExitCode(pid)
                 val crashLog = readCrashLogContents()
-                Timber.tag(TAG).w("BRIDGE_EXITED: pid=%d, exit=%d", pid, exitCode)
-                if (crashLog != null) {
-                    Timber.tag(TAG).e("BRIDGE_CRASH_LOG:\n%s", crashLog)
-                } else {
-                    Timber.tag(TAG).w("BRIDGE_CRASH_LOG: (no captured output)")
-                }
+                val crashReason = crashLog ?: "(no captured output)"
+                android.util.Log.e("TunnelBridge", "BRIDGE_EXITED: pid=$pid, exit=$exitCode")
+                android.util.Log.e("TunnelBridge", "CRASH_REASON:\n$crashReason")
                 Timber.tag(TAG).i("BRIDGE_START_RESULT: FAILED (exit=%d)", exitCode)
                 bridgePid = -1
                 status = BridgeStatus.Failed
                 throw BridgeStartException(
-                    "hev-socks5-tunnel exited (pid=$pid, code=$exitCode)"
+                    "hev-socks5-tunnel exited (pid=$pid, code=$exitCode)\n$crashReason"
                 )
             }
             updateTunDiagnostics()
