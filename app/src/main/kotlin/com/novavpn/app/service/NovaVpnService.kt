@@ -63,6 +63,10 @@ class NovaVpnService : VpnService() {
 
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
+
+    /** Dup'd TUN fd (non-CLOEXEC) passed exclusively to hev-socks5-tunnel bridge. */
+    private var bridgeDupFd: java.io.FileDescriptor? = null
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectionJob: Job? = null
     private var tunHealthJob: Job? = null
@@ -239,11 +243,6 @@ class NovaVpnService : VpnService() {
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
-        // Clear FD_CLOEXEC so child processes (Xray, hev-socks5-tunnel) can
-        // inherit the TUN fd across exec().  Tries multiple strategies:
-        //   1. android.system.Os.fcntlInt   (API 29+)
-        //   2. libcore.io.Os.fcntl/fsfcntl  (API 26-28 with hidden-api bypass)
-        clearFdCloexec(tun.fd)
         Timber.tag(TAG).i("TUN established: fd=%d, interface=%s",
             tun.fd, NovaConfig.VPN_SESSION_NAME)
 
@@ -304,8 +303,36 @@ class NovaVpnService : VpnService() {
         // ── CHECK CANCELLATION before bridge start ──
         currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
+
+        // Dup TUN fd -> inheritable copy WITHOUT FD_CLOEXEC (POSIX guarantee).
+        // Original tun.fd retains CLOEXEC; child process (hev-socks5-tunnel)
+        // receives the dup'd copy which survives fork+exec.
+        val rawFd = buildFileDescriptor(tun.fd) ?: run {
+            connectUseCase.updateState(VpnState.Error("Bridge: FileDescriptor build failed"))
+            updateNotification("Bridge failed"); return
+        }
+        val dupedFd = try {
+            android.system.Os.dup(rawFd)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "DUP_FAILED: Os.dup(%d) — %s", tun.fd, e.message)
+            connectUseCase.updateState(VpnState.Error("Bridge: dup failed"))
+            updateNotification("Bridge failed"); return
+        }
+        val inheritableFd = try {
+            val field = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
+            field.isAccessible = true
+            field.getInt(dupedFd)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "DUP_FAILED: fd extraction — %s", e.message)
+            try { android.system.Os.close(dupedFd) } catch (_: Exception) {}
+            connectUseCase.updateState(VpnState.Error("Bridge: fd extraction failed"))
+            updateNotification("Bridge failed"); return
+        }
+        bridgeDupFd = dupedFd
+        Timber.tag(TAG).i("DUP_OK: rawFd=%d -> inheritableFd=%d", tun.fd, inheritableFd)
+
         try {
-            tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
+            tunnelBridge.start(inheritableFd, "127.0.0.1", 10808)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "LIFECYCLE: BRIDGE_START_FAILED → %s", e.message)
             connectUseCase.updateState(VpnState.Error("Bridge failed: ${e.message}"))
@@ -444,6 +471,13 @@ class NovaVpnService : VpnService() {
             bridgeStarted = false
         }
 
+        // Close dup'd TUN fd owned by us for the bridge
+        if (bridgeDupFd != null) {
+            Timber.tag(TAG).i("[VpnLifecycle] Closing dup'd bridge fd...")
+            try { android.system.Os.close(bridgeDupFd) } catch (_: Exception) { }
+            bridgeDupFd = null
+        }
+
         if (engineStarted) {
             Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core (3s timeout)...")
             try {
@@ -534,6 +568,14 @@ class NovaVpnService : VpnService() {
             Timber.tag(TAG).e(e, "[VpnLifecycle] Bridge stop exception: %s", e.message)
         }
         bridgeStarted = false
+
+        // Close dup'd TUN fd owned by us for the bridge
+        if (bridgeDupFd != null) {
+            Timber.tag(TAG).i("[VpnLifecycle] Closing dup'd bridge fd...")
+            try { android.system.Os.close(bridgeDupFd) } catch (_: Exception) { }
+            bridgeDupFd = null
+        }
+
         Timber.tag(TAG).i("[VpnLifecycle] Closing tunFd...")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
@@ -580,47 +622,8 @@ class NovaVpnService : VpnService() {
     }
 
     // ------------------------------------------------------------------
-    // FD_CLOEXEC helpers
+    // FD helper — int → FileDescriptor
     // ------------------------------------------------------------------
-
-    /**
-     * Clear FD_CLOEXEC on a TUN fd so child processes (Xray and
-     * hev-socks5-tunnel) can inherit it across [ProcessBuilder.exec].
-     *
-     * Tries up to three strategies:
-     *  1. [android.system.Os.fcntlInt] — API 29+
-     *  2. [libcore.io.Os.fcntl]/fcntlFcntl via reflection — API 26–28
-     *     (hidden‑API bypass via VMRuntime on API 28+)
-     */
-    private fun clearFdCloexec(fdNum: Int) {
-        // Strategy 1: android.system.Os (API 29+)
-        if (clearViaSystemOs(fdNum)) return
-
-        // Strategy 2: libcore.io.Os via reflection (API 26–27, API 28 with bypass)
-        exemptHiddenApis()
-        if (clearViaLibcore(fdNum)) return
-
-        // All strategies failed — child processes will fail to inherit
-        Timber.tag(TAG).w(
-            "FD_CLOEXEC: all strategies failed — Xray/bridge will " +
-            "not inherit TUN fd %d on this device",
-            fdNum
-        )
-    }
-
-    /** Bypass Android hidden‑API restrictions (for [clearViaLibcore] on API 28+). */
-    private fun exemptHiddenApis() {
-        try {
-            val rtCls = Class.forName("dalvik.system.VMRuntime")
-            val getRt = rtCls.getDeclaredMethod("getRuntime").also { it.isAccessible = true }
-            val rt = getRt.invoke(null)
-            val setExempt = rtCls.getDeclaredMethod(
-                "setHiddenApiExemptions", Array<String>::class.java
-            ).also { it.isAccessible = true }
-            setExempt.invoke(rt, arrayOf("L"))
-            Timber.tag(TAG).i("FD_CLOEXEC: hidden‑API exemption granted")
-        } catch (_: Exception) { /* not available, silently continue */ }
-    }
 
     /** Build a [java.io.FileDescriptor] for an integer fd number via reflection. */
     private fun buildFileDescriptor(fdNum: Int): java.io.FileDescriptor? = try {
@@ -628,68 +631,12 @@ class NovaVpnService : VpnService() {
         val field = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
         field.isAccessible = true
         field.setInt(fd, fdNum)
-        Timber.tag(TAG).v("FD_CLOEXEC: built FileDescriptor for fd=%d", fdNum)
+        Timber.tag(TAG).v("FD_HELPER: built FileDescriptor for fd=%d", fdNum)
         fd
     } catch (e: Exception) {
-        Timber.tag(TAG).w("FD_CLOEXEC: FileDescriptor build failed: %s", e.message)
+        Timber.tag(TAG).w("FD_HELPER: FileDescriptor build failed: %s", e.message)
         null
     }
-
-    /**
-     * Clear FD_CLOEXEC via [android.system.Os.fcntlInt] (API 29+ only).
-     * Returns `true` on success.
-     */
-    private fun clearViaSystemOs(fdNum: Int): Boolean {
-        return try {
-            val fd = buildFileDescriptor(fdNum) ?: return false
-            // Import resolved at compile‑time; runtime check via try/catch.
-            android.system.Os.fcntlInt(fd, 2, 0)
-            Timber.tag(TAG).i("FD_CLOEXEC cleared via android.system.Os: fd=%d", fdNum)
-            true
-        } catch (e: Exception) {
-            Timber.tag(TAG).w("FD_CLOEXEC: android.system.Os failed (%s)", e.message)
-            false
-        }
-    }
-
-    /**
-     * Clear FD_CLOEXEC via [libcore.io.Os] reflection.
-     * Tries both "fcntlFcntl" (API 31+) and "fcntl" (API 26–30) method names.
-     * Returns `true` on success.
-     */
-    private fun clearViaLibcore(fdNum: Int): Boolean {
-        try {
-            val osCls = Class.forName("libcore.io.Os")
-            val getDefault = osCls.getMethod("getDefault")
-            val os = getDefault.invoke(null)
-            val fd = buildFileDescriptor(fdNum) ?: return false
-
-            val paramTypes = arrayOf(
-                java.io.FileDescriptor::class.java,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType
-            )
-
-            for (methodName in listOf("fcntlFcntl", "fcntl")) {
-                try {
-                    val m = osCls.getMethod(methodName, *paramTypes.also {
-                        Timber.tag(TAG).v("FD_CLOEXEC: trying libcore %s(...)", methodName)
-                    })
-                    m.invoke(os, fd, 2, 0)
-                    Timber.tag(TAG).i("FD_CLOEXEC cleared via libcore.%s: fd=%d", methodName, fdNum)
-                    return true
-                } catch (_: NoSuchMethodException) {
-                    /* try the next name */
-                }
-            }
-            Timber.tag(TAG).w("FD_CLOEXEC: libcore had no suitable fcntl method")
-            return false
-        } catch (e: Exception) {
-            Timber.tag(TAG).w("FD_CLOEXEC: libcore.io.Os unavailable (%s)", e.message)
-            return false
-        }
-    }
-
     // ------------------------------------------------------------------
     // Notifications
     // ------------------------------------------------------------------
