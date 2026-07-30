@@ -294,11 +294,15 @@ class XrayEngine @Inject constructor(
                 val xrayProcess = pb.start()
                 process = xrayProcess
 
-                // 5. Start process output collector (reads stdout/stderr)
-                startOutputCollector(xrayProcess)
-
-                // 6. Cancellable init wait loop — checks actual running marker
+                // 5. 🔴 CRITICAL: awaitXrayReady MUST run BEFORE startOutputCollector,
+                //    otherwise the collector consumes all stderr and awaitXrayReady
+                //    never sees the startup marker ("Xray ... started" / "listening TCP").
+                //    See: output collector uses reader.readLine() on the same InputStream.
                 val initResult = awaitXrayReady(xrayProcess)
+
+                // 5b. Only start the real-time output collector AFTER we've seen
+                //     the startup marker, so it doesn't steal output.
+                startOutputCollector(xrayProcess)
 
                 if (initResult === ReadyResult.READY) {
                     // ✅ Xray is alive, confirming Running
