@@ -20,17 +20,20 @@ object NativeBridgeRunner {
     }
 
     /**
-     * Fork a child process, clear FD_CLOEXEC on [tunFd], then exec [binaryPath].
+     * Fork a child process, clear FD_CLOEXEC on [tunFd], redirect stdout/
+     * stderr to [logFilePath], then exec [binaryPath].
      *
-     * @param binaryPath absolute path to the executable
-     * @param args       arguments (NOT including the binary path itself)
-     * @param tunFd      TUN file descriptor to preserve in the child
+     * @param binaryPath  absolute path to the executable
+     * @param args        arguments (NOT including the binary path itself)
+     * @param tunFd       TUN file descriptor to preserve in the child
+     * @param logFilePath optional path to capture stdout+stderr (empty = skip)
      * @return child PID (positive) on success, or a negative errno on failure
      */
     external fun nativeForkExec(
         binaryPath: String,
         args: Array<String>,
-        tunFd: Int
+        tunFd: Int,
+        logFilePath: String
     ): Int
 
     /**

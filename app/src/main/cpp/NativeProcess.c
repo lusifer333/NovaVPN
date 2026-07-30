@@ -13,12 +13,17 @@
  *   This native implementation calls fork() directly, clears FD_CLOEXEC on the
  *   TUN fd in the child, then execv().  The kernel POSIX semantics guarantee
  *   that a non-CLOEXEC fd survives exec() when called this way.
+ *
+ * Stdout/stderr from the child are redirected to a log file (logFilePath)
+ * so that if the bridge binary crashes immediately after execv, its dying
+ * words are captured for diagnostics.
  */
 
 #include <jni.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,15 +74,33 @@ static void free_argv(char **argv, jsize arg_count) {
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
+ * Helper: open a log file and redirect stdout+stderr to it.
+ * Called in the child process before execv().
+ */
+static void redirect_stdio_to_file(const char *logPath) {
+    if (!logPath || logPath[0] == '\0') return;
+
+    int logFd = open(logPath,
+                     O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                     S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (logFd < 0) return;
+
+    dup2(logFd, STDOUT_FILENO);
+    dup2(logFd, STDERR_FILENO);
+    close(logFd);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
  * JNI: nativeForkExec
  *
  * Signature:
  *   static native int nativeForkExec(String binaryPath, String[] args,
- *                                     int tunFd);
+ *                                     int tunFd, String logFilePath);
  *
- *   binaryPath  – absolute path to the executable
- *   args        – command-line arguments (NOT including the binary path)
- *   tunFd       – TUN fd to preserve in the child (FD_CLOEXEC cleared)
+ *   binaryPath   – absolute path to the executable
+ *   args         – command-line arguments (NOT including the binary path)
+ *   tunFd        – TUN fd to preserve in the child (FD_CLOEXEC cleared)
+ *   logFilePath   – optional path to capture stdout+stderr (empty = no capture)
  *
  * Returns:
  *   > 0  – child PID (process launched successfully)
@@ -86,16 +109,23 @@ static void free_argv(char **argv, jsize arg_count) {
 JNIEXPORT jint JNICALL
 Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
     JNIEnv *env, jclass clazz,
-    jstring binaryPath, jobjectArray args, jint tunFd) {
+    jstring binaryPath, jobjectArray args, jint tunFd,
+    jstring logFilePath) {
 
     const char *binary = (*env)->GetStringUTFChars(env, binaryPath, NULL);
     if (!binary) return -ENOMEM;
+
+    const char *logPath = NULL;
+    if (logFilePath) {
+        logPath = (*env)->GetStringUTFChars(env, logFilePath, NULL);
+    }
 
     /* Build argv[] */
     int err = 0;
     char **argv = build_argv(env, binary, args, &err);
     if (!argv) {
         (*env)->ReleaseStringUTFChars(env, binaryPath, binary);
+        if (logPath) (*env)->ReleaseStringUTFChars(env, logFilePath, logPath);
         return -err;
     }
     jsize arg_count = (*env)->GetArrayLength(env, args);
@@ -105,6 +135,7 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
 
     if (pid == 0) {
         /* ─── CHILD ─── */
+
         /* Clear FD_CLOEXEC on the TUN fd so it survives execv().
          * Belt-and-suspenders: Os.dup() in Java already produced a
          * non-CLOEXEC copy, but guard against any regression.  If
@@ -112,10 +143,8 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
          * CLOEXEC anyway, so this is purely defensive. */
         fcntl(tunFd, F_SETFD, 0);
 
-        /* Set O_NONBLOCK — hev-socks5-tunnel uses epoll and will
-         * deadlock if given a blocking file descriptor. */
-        int tflags = fcntl(tunFd, F_GETFL, 0);
-        fcntl(tunFd, F_SETFL, tflags | O_NONBLOCK);
+        /* Capture stdout+stderr so bridge crash output is visible */
+        redirect_stdio_to_file(logPath);
 
         /* Replace process image with the bridge binary */
         execv(binary, argv);
@@ -127,6 +156,7 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
     /* ─── PARENT ─── */
     free_argv(argv, arg_count);
     (*env)->ReleaseStringUTFChars(env, binaryPath, binary);
+    if (logPath) (*env)->ReleaseStringUTFChars(env, logFilePath, logPath);
 
     if (pid < 0) return -errno;
     return (jint)pid;

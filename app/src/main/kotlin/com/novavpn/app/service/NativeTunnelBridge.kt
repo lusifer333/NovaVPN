@@ -36,6 +36,8 @@ class NativeTunnelBridge @Inject constructor(
         private const val TAG = "TunnelBridge"
         private const val BINARY_NAME = "libhev-socks5-tunnel.so"
         private const val BRIDGE_TIMEOUT_SEC = 5L
+        private const val CONFIG_FILE_NAME = "bridge_config.yml"
+        private const val CRASH_LOG_NAME = "hev_bridge_crash.log"
     }
 
     override val type: String = "hev-socks5-tunnel"
@@ -48,6 +50,11 @@ class NativeTunnelBridge @Inject constructor(
     private var tunFd: Int = -1
     private var socksHost: String = ""
     private var socksPort: Int = 10808
+
+    // File paths (resolved lazily)
+    private val configDir: File get() = File(context.cacheDir, "novavpn/bridge").also { it.mkdirs() }
+    private val configFile: File get() = File(configDir, CONFIG_FILE_NAME)
+    private val crashLogFile: File get() = File(configDir, CRASH_LOG_NAME)
 
     // Diagnostics counters
     private val diagPackets = AtomicLong(0)
@@ -71,14 +78,21 @@ class NativeTunnelBridge @Inject constructor(
 
         try {
             ensureBinary()
-            File(binaryPath).setExecutable(true, false)
 
-            // Build args — fd comes as a string argument to the child
-            val args = arrayOf("--fd", tunFd.toString(), "--socks5", "$socksHost:$socksPort")
+            // Write YAML config file for the bridge binary
+            val cfgPath = writeBridgeConfig(tunFd, socksHost, socksPort)
+            Timber.tag(TAG).i("BRIDGE_CONFIG: %s", cfgPath)
+
+            // Build args — point binary at the config file
+            val args = arrayOf("--config", cfgPath)
             Timber.tag(TAG).i("BRIDGE_COMMAND: %s %s", binaryPath, args.joinToString(" "))
 
+            // Clear any previous crash log
+            crashLogFile.delete()
+
             // Fork+exec via JNI — preserves the TUN fd in the child
-            val pid = NativeBridgeRunner.nativeForkExec(binaryPath, args, tunFd)
+            val logPath = crashLogFile.absolutePath.also { Timber.tag(TAG).d("CRASH_LOG: %s", it) }
+            val pid = NativeBridgeRunner.nativeForkExec(binaryPath, args, tunFd, logPath)
             if (pid <= 0) {
                 val errno = -pid
                 val msg = "nativeForkExec failed: errno=$errno"
@@ -113,7 +127,13 @@ class NativeTunnelBridge @Inject constructor(
             } else {
                 // Reap exit status via waitpid
                 val exitCode = reapExitCode(pid)
+                val crashLog = readCrashLog()
                 Timber.tag(TAG).w("BRIDGE_EXITED: pid=%d, exit=%d", pid, exitCode)
+                if (crashLog != null) {
+                    Timber.tag(TAG).e("BRIDGE_CRASH_LOG:\n%s", crashLog)
+                } else {
+                    Timber.tag(TAG).w("BRIDGE_CRASH_LOG: (no captured output)")
+                }
                 Timber.tag(TAG).i("BRIDGE_START_RESULT: FAILED (exit=%d)", exitCode)
                 bridgePid = -1
                 status = BridgeStatus.Failed
@@ -162,6 +182,46 @@ class NativeTunnelBridge @Inject constructor(
             processAlive = procAlive,
             errorMessage = if (status == BridgeStatus.Failed) "Bridge process not running" else ""
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Bridge config YAML
+    // ------------------------------------------------------------------
+
+    /**
+     * Write a YAML config file for hev-socks5-tunnel in the app's cache
+     * directory and return its absolute path.
+     */
+    private fun writeBridgeConfig(tunFd: Int, host: String, port: Int): String {
+        val yaml = buildString {
+            appendLine("workers: 1")
+            appendLine("tunnel:")
+            appendLine("  mtu: 1500")
+            appendLine("  fd: $tunFd")
+            appendLine("socks5:")
+            appendLine("  address: \"$host\"")
+            appendLine("  port: $port")
+        }
+        configFile.writeText(yaml)
+        Timber.tag(TAG).d("BRIDGE_CONFIG_WRITTEN: %s (%d bytes)", configFile, yaml.length)
+        return configFile.absolutePath
+    }
+
+    // ------------------------------------------------------------------
+    // Crash log
+    // ------------------------------------------------------------------
+
+    /**
+     * Read the captured stderr/stdout from the bridge binary, or return null
+     * if the file doesn't exist or is empty.
+     */
+    private fun readCrashLog(): String? {
+        return try {
+            val content = crashLogFile.readText().trim()
+            if (content.isNotEmpty()) content else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     // ------------------------------------------------------------------
@@ -249,8 +309,6 @@ class NativeTunnelBridge @Inject constructor(
      * Returns the exit status (0–255), or -1 if waitpid fails.
      */
     private fun reapExitCode(pid: Int): Int {
-        // We know the process has exited (nativeIsAlive returned 0).
-        // nativeWaitFor with timeout=0 does one immediate waitpid(WNOHANG).
         return NativeBridgeRunner.nativeWaitFor(pid, 0)
     }
 
