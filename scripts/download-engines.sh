@@ -53,36 +53,12 @@ else
   echo "  Installed: $XRAY_SO ($(du -h "$XRAY_SO" | cut -f1))"
 fi
 
-# ------------------------------------------------------------
-# hev-socks5-tunnel  →  jniLibs/<arch>/hev-socks5-tunnel
-# TUN-to-SOCKS5 bridge binary for Android.
-# Pre-built binaries available since v2.15.0.
-# ------------------------------------------------------------
-echo ""
-echo "--- hev-socks5-tunnel ($ARCH) ---"
-
-TUNNEL_BIN="$JNILIBS_DIR/$ARCH/libhev-socks5-tunnel.so"
-
-if [ -f "$TUNNEL_BIN" ] && [ "$(head -c 3 "$TUNNEL_BIN")" != "#!/" ]; then
-  echo "  Already exists: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"
-  echo "  Skipping."
-else
-  HEV_URL="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}/hev-socks5-tunnel-android-${RELEASE_ARCH}"
-
-  echo "  Downloading: $HEV_URL"
-  # Remove old placeholder if exists
-  rm -f "$TUNNEL_BIN"
-  curl -sL "$HEV_URL" -o "$TUNNEL_BIN"
-  chmod +x "$TUNNEL_BIN"
-  echo "  Installed: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"
-fi
-
 echo ""
 echo "==> Done! Binaries ready under $JNILIBS_DIR/$ARCH/"
 echo ""
+echo "Note: hev-socks5-tunnel is now compiled from source as a CMake static library."
+echo "No separate binary download needed."
+echo ""
 echo "Next: rebuild the APK with:"
 echo "  ./gradlew assembleDebug"
-echo ""
-echo "Note: ensure app/src/main/AndroidManifest.xml has:"
-echo '  android:extractNativeLibs="true"'
 echo ""

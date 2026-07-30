@@ -119,8 +119,8 @@ class XrayEngine @Inject constructor(
     override suspend fun initialize(context: EngineContext): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             // Store DNS servers and routes from VpnService for config generation.
-            // Xray acts as a pure SOCKS5 proxy — the TUN fd is managed exclusively
-            // by NovaVpnService and passed directly to hev-socks5-tunnel bridge.
+            // Xray acts as a pure SOCKS5 proxy — the TUN interface is managed
+            // exclusively by NovaVpnService and the hev-socks5-tunnel bridge.
             dnsServers = context.dnsServers
             routes = context.routes
 
@@ -271,8 +271,6 @@ class XrayEngine @Inject constructor(
 
                 Timber.tag(TAG).i("XRAY_PROCESS_ARGS: %s run -c %s",
                     binaryPath, tempFile.absolutePath)
-                com.novavpn.domain.model.TunDiagnostics.processArgs =
-                    "$binaryPath run -c ${tempFile.absolutePath}"
 
                 val xrayProcess = pb.start()
 
@@ -302,7 +300,7 @@ class XrayEngine @Inject constructor(
                         val pidF = xrayProcess.javaClass.getDeclaredField("pid")
                         pidF.isAccessible = true
                         val pidVal = pidF.getInt(xrayProcess)
-                        TunDiagnostics.storePid(pidVal)
+                        TunDiagnostics.xrayPid = pidVal
                     } catch (_: Exception) { }
 
                     Timber.tag(TAG).i("XRAY_READY: SOCKS5 proxy started successfully")

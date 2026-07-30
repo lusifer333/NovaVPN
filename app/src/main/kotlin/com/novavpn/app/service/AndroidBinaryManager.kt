@@ -110,7 +110,7 @@ class AndroidBinaryManager @Inject constructor(
                 appendLine("Engine binary not found — all methods exhausted!")
                 appendLine("  1. nativeLibraryDir: ${nativePath.absolutePath}")
                 appendLine("  2. Assets: ${assetsPath(type)}")
-                appendLine("  3. APK zip: lib/$abi/lib${type.name.lowercase()}.so")
+                appendLine("  3. APK zip: lib/$abi/${libNameFor(type)}")
                 appendLine("  Run: scripts/download-engines.sh")
             })
         }
@@ -124,7 +124,7 @@ class AndroidBinaryManager @Inject constructor(
      */
     private fun extractFromApkZip(type: EngineType): String {
         val apkFile = File(context.applicationInfo.sourceDir)
-        val libName = "${libPrefix}${type.name.lowercase()}.so"
+        val libName = libNameFor(type)
         val entryPath = "lib/$abi/$libName"
         val target = binaryFile(type)
         target.parentFile?.mkdirs()
@@ -183,10 +183,12 @@ class AndroidBinaryManager @Inject constructor(
     private val libPrefix: String
         get() = "lib"
 
+    /** Unified lib name — respects type.libName override (e.g. libhev-socks5-tunnel.so). */
+    private fun libNameFor(type: EngineType): String =
+        type.libName ?: "${libPrefix}${type.name.lowercase()}.so"
+
     private fun nativeBinaryFile(type: EngineType): File {
-        // jniLibs/<abi>/lib<engine>.so → nativeLibraryDir/lib<engine>.so
-        val libName = "${libPrefix}${type.name.lowercase()}.so"
-        return File(context.applicationInfo.nativeLibraryDir, libName)
+        return File(context.applicationInfo.nativeLibraryDir, libNameFor(type))
     }
 
     private fun binaryFile(type: EngineType): File {
@@ -204,7 +206,7 @@ class AndroidBinaryManager @Inject constructor(
         } catch (e: FileNotFoundException) {
             val msg = buildString {
                 appendLine("Engine binary not found in assets or native libs!")
-                appendLine("  Native lib expected: app/src/main/jniLibs/$abi/lib${type.name.lowercase()}.so")
+                appendLine("  Native lib expected: app/src/main/jniLibs/$abi/${libNameFor(type)}")
                 appendLine("  Assets fallback: app/src/main/assets/$assetPath")
                 appendLine("  Run: scripts/download-engines.sh")
             }

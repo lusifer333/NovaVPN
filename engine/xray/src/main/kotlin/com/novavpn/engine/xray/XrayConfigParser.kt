@@ -72,9 +72,6 @@ object XrayConfigParser {
         val inboundProto = firstInbound?.get("protocol")?.jsonPrimitive?.content ?: "unknown"
         Timber.tag(TAG).i("INBOUND_TYPE=%s, numInbounds=%d",
             inboundProto, inbounds?.size ?: 0)
-        // Store in persistent TUN diagnostics
-        com.novavpn.domain.model.TunDiagnostics.inboundType = inboundProto
-        com.novavpn.domain.model.TunDiagnostics.numInbounds = inbounds?.size ?: 0
         return jsonStr
     }
 

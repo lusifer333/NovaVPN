@@ -63,9 +63,7 @@ class NovaVpnService : VpnService() {
 
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
-
-    /** Dup'd TUN fd (non-CLOEXEC) passed exclusively to hev-socks5-tunnel bridge. */
-    private var bridgeDupFd: java.io.FileDescriptor? = null
+    private var tunName: String = ""
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectionJob: Job? = null
@@ -243,8 +241,16 @@ class NovaVpnService : VpnService() {
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
-        Timber.tag(TAG).i("TUN established: fd=%d, interface=%s",
-            tun.fd, NovaConfig.VPN_SESSION_NAME)
+
+        // ── Discover TUN interface name via TUNGETIFF ioctl ──
+        tunName = try {
+            NativeBridgeRunner.nativeGetTunName(tun.fd)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "TUNGETIFF failed for fd=%d", tun.fd)
+            connectUseCase.updateState(VpnState.Error("TUN name discovery failed: ${e.message}"))
+            updateNotification("TUN failed"); return
+        }
+        Timber.tag(TAG).i("TUN established: fd=%d, name=%s", tun.fd, tunName)
 
         // ── CHECK CANCELLATION before engine init ──
         currentCoroutineContext().ensureActive()
@@ -257,11 +263,12 @@ class NovaVpnService : VpnService() {
         val ctx = object : EngineContext {
             override val isVpnPermissionGranted = true
             override val tunFileDescriptor = tun.fd
+            override val tunName = this@NovaVpnService.tunName
             override val dnsServers = listOf("8.8.8.8", "1.1.1.1")
             override val routes = listOf("0.0.0.0/0")
         }
-        Timber.tag(TAG).i("EngineContext created: tunFd=%d, dns=%s, routes=%s",
-            ctx.tunFileDescriptor, ctx.dnsServers, ctx.routes)
+        Timber.tag(TAG).i("EngineContext created: tunFd=%d, tunName=%s, dns=%s, routes=%s",
+            ctx.tunFileDescriptor, ctx.tunName, ctx.dnsServers, ctx.routes)
 
         // ── ENGINE INIT ──
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_INIT")
@@ -302,56 +309,30 @@ class NovaVpnService : VpnService() {
 
         // ── CHECK CANCELLATION before bridge start ──
         currentCoroutineContext().ensureActive()
-        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
+        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING (in-process library, fd=%d)", tun.fd)
 
-        // Dup TUN fd -> inheritable copy WITHOUT FD_CLOEXEC (POSIX guarantee).
-        // Original tun.fd retains CLOEXEC; child process (hev-socks5-tunnel)
-        // receives the dup'd copy which survives fork+exec.
-        val rawFd = buildFileDescriptor(tun.fd) ?: run {
-            connectUseCase.updateState(VpnState.Error("Bridge: FileDescriptor build failed"))
-            updateNotification("Bridge failed"); return
-        }
-        val dupedFd = try {
-            android.system.Os.dup(rawFd)
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "DUP_FAILED: Os.dup(%d) — %s", tun.fd, e.message)
-            connectUseCase.updateState(VpnState.Error("Bridge: dup failed"))
-            updateNotification("Bridge failed"); return
-        }
-        val inheritableFd = try {
-            val field = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
-            field.isAccessible = true
-            field.getInt(dupedFd)
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "DUP_FAILED: fd extraction — %s", e.message)
-            try { android.system.Os.close(dupedFd) } catch (_: Exception) {}
-            connectUseCase.updateState(VpnState.Error("Bridge: fd extraction failed"))
-            updateNotification("Bridge failed"); return
-        }
-        bridgeDupFd = dupedFd
-        Timber.tag(TAG).i("DUP_OK: rawFd=%d -> inheritableFd=%d", tun.fd, inheritableFd)
-        com.novavpn.domain.model.TunDiagnostics.rawFd = tun.fd
-        com.novavpn.domain.model.TunDiagnostics.inheritableFd = inheritableFd
-        com.novavpn.domain.model.TunDiagnostics.dupOK = true
-
-        try {
-            tunnelBridge.start(inheritableFd, "127.0.0.1", 10808)
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "LIFECYCLE: BRIDGE_START_FAILED → %s", e.message)
-            connectUseCase.updateState(VpnState.Error("Bridge failed: ${e.message}"))
+        // Start the in-process hev-socks5-tunnel library with the TUN fd
+        tunnelBridge.start(
+            tunFd = tun.fd,
+            socksHost = "127.0.0.1",
+            socksPort = 10808,
+        ).onFailure { error ->
+            Timber.tag(TAG).e("LIFECYCLE: BRIDGE_START_FAILED → %s", error.message)
+            connectUseCase.updateState(VpnState.Error("Bridge failed: ${error.message}"))
             updateNotification("Bridge failed")
             engine.stop(); engineStarted = false
             return
         }
-        if (tunnelBridge.status != com.novavpn.engine.api.BridgeStatus.Running) {
-            Timber.tag(TAG).e("LIFECYCLE: BRIDGE_STATUS=%s — aborting", tunnelBridge.status.name)
-            connectUseCase.updateState(VpnState.Error("Bridge status: ${tunnelBridge.status.name}"))
+        if (!tunnelBridge.isRunning) {
+            Timber.tag(TAG).e("LIFECYCLE: BRIDGE_NOT_RUNNING — aborting")
+            connectUseCase.updateState(VpnState.Error("Bridge not running after start"))
             updateNotification("Bridge failed")
             engine.stop(); engineStarted = false
             return
         }
         bridgeStarted = true
-        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STATUS=%s", tunnelBridge.status.name)
+        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_RUNNING (tunFd=%d, running=%s)",
+            tun.fd, tunnelBridge.isRunning)
 
         // ── ALL SYSTEMS GO → Connected (single source of truth) ──
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_RUNNING → state=Connected")
@@ -406,56 +387,27 @@ class NovaVpnService : VpnService() {
                     try {
                         val sock = java.net.Socket()
                         sock.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 200)
-                        com.novavpn.domain.model.TunDiagnostics.socks5Listening = true
                         sock.close()
-                    } catch (_: Exception) {
-                        com.novavpn.domain.model.TunDiagnostics.socks5Listening = false
-                    }
+                    } catch (_: Exception) { }
                 }
 
-                val bridgeDiag = tunnelBridge.diagnostics()
-                com.novavpn.domain.model.TunDiagnostics.bridgeRunning = bridgeDiag.processAlive
-                com.novavpn.domain.model.TunDiagnostics.bridgePackets = bridgeDiag.forwardedPackets
-                com.novavpn.domain.model.TunDiagnostics.bridgeBytes = bridgeDiag.forwardedBytes
-                com.novavpn.domain.model.TunDiagnostics.bridgeErrors = bridgeDiag.forwardErrors
+                // Bridge diagnostics (official binary — no fd details)
+                val diag = tunnelBridge.diagnostics
+                val bridgeAlive = diag.bridgeAlive
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
-                    "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d, " +
-                    "socks5=%s, tunReads=%d, bridge=%s, bPkts=%d, bBytes=%d, bErr=%d, " +
+                    "tunName=%s, bridge=%s, bPid=%d, bExit=%d, " +
                     "rxBytes=%d, txBytes=%d",
                     counter, fd, tunFdValid, engineState,
-                    com.novavpn.domain.model.TunDiagnostics.rawFd,
-                    com.novavpn.domain.model.TunDiagnostics.inheritableFd,
-                    com.novavpn.domain.model.TunDiagnostics.dupOK,
-                    com.novavpn.domain.model.TunDiagnostics.inboundType,
-                    com.novavpn.domain.model.TunDiagnostics.numInbounds,
-                    com.novavpn.domain.model.TunDiagnostics.socks5Listening,
-                    com.novavpn.domain.model.TunDiagnostics.tunReadAttempts,
-                    com.novavpn.domain.model.TunDiagnostics.bridgeRunning,
-                    com.novavpn.domain.model.TunDiagnostics.bridgePackets,
-                    bridgeDiag.forwardedBytes,
-                    com.novavpn.domain.model.TunDiagnostics.bridgeErrors,
+                    diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
                     rx, tx)
 
-                // If the bridge died, dump its captured stderr/stdout and exit code to Logcat
-                if (!bridgeDiag.processAlive) {
-                    // 1. Log the exit code captured by diagnostics()
-                    val exitCode = tunnelBridge.capturedExitCode
-                    android.util.Log.e("TunnelBridge", "BRIDGE_EXIT_CODE: $exitCode" +
-                        if (exitCode > 128) " (SIGNAL ${exitCode - 128})" else "")
-
-                    // 2. Dump crash log file (captured stderr/stdout from C child)
-                    val crashLogFile = java.io.File(cacheDir, "novavpn/bridge/hev_bridge_crash.log")
-                    if (crashLogFile.exists()) {
-                        val text = crashLogFile.readText().trim()
-                        if (text.isNotEmpty()) {
-                            android.util.Log.e("TunnelBridge", "CRASH_CAUSE:\n$text")
-                        } else {
-                            android.util.Log.e("TunnelBridge", "CRASH_CAUSE: (empty - bridge died before writing output)")
-                        }
-                    } else {
-                        android.util.Log.e("TunnelBridge", "CRASH_CAUSE: (log file not found)")
-                    }
+                // If the bridge died, dump crash log
+                if (!bridgeAlive) {
+                    val crashLog = diag.bridgeExitMessage
+                    android.util.Log.e("TunnelBridge",
+                        "BRIDGE_EXIT: pid=%d, code=%d, msg=%s",
+                        diag.bridgePid, diag.bridgeExitCode, crashLog)
                 }
             }
         }
@@ -495,13 +447,6 @@ class NovaVpnService : VpnService() {
             bridgeStarted = false
         }
 
-        // Close dup'd TUN fd owned by us for the bridge
-        if (bridgeDupFd != null) {
-            Timber.tag(TAG).i("[VpnLifecycle] Closing dup'd bridge fd...")
-            try { android.system.Os.close(bridgeDupFd) } catch (_: Exception) { }
-            bridgeDupFd = null
-        }
-
         if (engineStarted) {
             Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core (3s timeout)...")
             try {
@@ -521,7 +466,7 @@ class NovaVpnService : VpnService() {
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null
         currentConfig = null
-        TunDiagnostics.reset()
+        tunName = ""
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
@@ -593,17 +538,10 @@ class NovaVpnService : VpnService() {
         }
         bridgeStarted = false
 
-        // Close dup'd TUN fd owned by us for the bridge
-        if (bridgeDupFd != null) {
-            Timber.tag(TAG).i("[VpnLifecycle] Closing dup'd bridge fd...")
-            try { android.system.Os.close(bridgeDupFd) } catch (_: Exception) { }
-            bridgeDupFd = null
-        }
-
         Timber.tag(TAG).i("[VpnLifecycle] Closing tunFd...")
         try { tunInterface?.close() } catch (_: Exception) { }
-        tunInterface = null; currentConfig = null
-        com.novavpn.domain.model.TunDiagnostics.reset()
+        tunInterface = null; currentConfig = null; tunName = ""
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
         connectUseCase.updateState(VpnState.Disconnected)
@@ -648,22 +586,6 @@ class NovaVpnService : VpnService() {
         null
     }
 
-    // ------------------------------------------------------------------
-    // FD helper — int → FileDescriptor
-    // ------------------------------------------------------------------
-
-    /** Build a [java.io.FileDescriptor] for an integer fd number via reflection. */
-    private fun buildFileDescriptor(fdNum: Int): java.io.FileDescriptor? = try {
-        val fd = java.io.FileDescriptor()
-        val field = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
-        field.isAccessible = true
-        field.setInt(fd, fdNum)
-        Timber.tag(TAG).v("FD_HELPER: built FileDescriptor for fd=%d", fdNum)
-        fd
-    } catch (e: Exception) {
-        Timber.tag(TAG).w("FD_HELPER: FileDescriptor build failed: %s", e.message)
-        null
-    }
     // ------------------------------------------------------------------
     // Notifications
     // ------------------------------------------------------------------

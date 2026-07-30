@@ -1,54 +1,46 @@
 package com.novavpn.engine.api
 
+import com.novavpn.domain.model.TunDiagnostics
+
 /**
- * Bridge between Android TUN interface and a SOCKS5 proxy.
+ * Low-level bridge to hev-socks5-tunnel library.
  *
- * Reads raw IP packets from the TUN file descriptor and forwards
- * TCP/UDP connections through a SOCKS5 proxy (typically Xray's
- * SOCKS5 inbound on 127.0.0.1:10808).
+ * The bridge manages the lifecycle of the in-process hev-socks5-tunnel
+ * library which forwards TUN traffic to a SOCKS5 proxy.
  *
- * Implementations use native binaries (not Kotlin TCP/IP stack):
- * - hev-socks5-tunnel (preferred)
- * - Custom Go-based fd-forwarder (fallback)
+ * Architecture:
+ *   1. VpnService creates the TUN interface via Builder.establish()
+ *   2. The TUN fd is passed directly to the bridge start()
+ *   3. A YAML config file is written for the upstream library
+ *   4. The library opens a background thread: hev_socks5_tunnel_main_from_file(config, fd)
+ *   5. The library uses the existing fd for all TUN I/O without owning it
+ *   6. The bridge reports diagnostics (running state + traffic stats)
  */
 interface TunnelBridge {
-    /** Unique bridge type identifier. */
-    val type: String
 
-    /** Current bridge status. */
-    val status: BridgeStatus
+    /** Whether the tunnel thread is currently running. */
+    val isRunning: Boolean
+
+    /** Get current diagnostics snapshot. */
+    val diagnostics: TunDiagnostics
 
     /**
-     * Start forwarding traffic between TUN fd and SOCKS5.
-     * @param tunFd TUN file descriptor from VpnService.Builder.establish()
-     * @param socksHost SOCKS5 proxy host (e.g. "127.0.0.1")
-     * @param socksPort SOCKS5 proxy port (e.g. 10808)
+     * Start the tunnel bridge in-process.
+     *
+     * @param tunFd        TUN fd from VpnService.Builder.establish()
+     * @param socksHost    SOCKS5 proxy host (127.0.0.1 for local Xray)
+     * @param socksPort    SOCKS5 proxy port (10808)
+     * @return Result.success when the tunnel thread is confirmed running
      */
-    suspend fun start(tunFd: Int, socksHost: String = "127.0.0.1", socksPort: Int = 10808)
+    suspend fun start(
+        tunFd: Int,
+        socksHost: String,
+        socksPort: Int,
+    ): Result<Unit>
 
-    /** Stop the bridge and release all resources. */
-    suspend fun stop()
+    /** Stop the tunnel gracefully via hev_socks5_tunnel_quit(). */
+    suspend fun stop(): Result<Unit>
 
-    /** Current diagnostic snapshot. */
-    fun diagnostics(): BridgeDiagnostics
+    /** Check tunnel thread state. */
+    suspend fun checkHealth(): Boolean
 }
-
-enum class BridgeStatus {
-    Idle,
-    Starting,
-    Running,
-    Stopping,
-    Failed
-}
-
-data class BridgeDiagnostics(
-    val status: BridgeStatus = BridgeStatus.Idle,
-    val forwardedPackets: Long = 0,
-    val forwardedBytes: Long = 0,
-    val forwardErrors: Long = 0,
-    val connectAttempts: Long = 0,
-    val connectSuccess: Long = 0,
-    val connectFailed: Long = 0,
-    val processAlive: Boolean = false,
-    val errorMessage: String = ""
-)

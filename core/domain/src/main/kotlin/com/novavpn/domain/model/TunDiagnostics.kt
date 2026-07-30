@@ -1,54 +1,43 @@
 package com.novavpn.domain.model
 
 /**
- * Persistent TUN diagnostic state, stored outside the log buffer.
- * Written by [XrayEngine] during engine start, read by [NovaVpnService]
- * for the periodic DIAG log. This ensures TUN status is always visible
- * even if the log buffer overflows with Xray debug output.
+ * Diagnostics snapshot for the TUN bridge (hev-socks5-tunnel).
+ *
+ * The bridge process runs the official upstream binary, which manages
+ * its own TUN fd internally. We do not track fd-level details here;
+ * we track process lifecycle and top-level traffic indicators.
  */
-object TunDiagnostics {
-    @Volatile
-    var rawFd: Int = -1
-    @Volatile
-    var inheritableFd: Int = -1
-    @Volatile
-    var dupOK: Boolean = false
-    @Volatile
-    var inboundType: String = "unknown"
-    @Volatile
-    var numInbounds: Int = 0
-    @Volatile
-    var processArgs: String = ""
-    @Volatile
-    var xrayPid: Int = -1
-    @Volatile
-    var socks5Listening: Boolean = false
-    @Volatile
-    var tunReadAttempts: Int = 0
-    @Volatile
-    var bridgeRunning: Boolean = false
-    @Volatile
-    var bridgePackets: Long = 0
-    @Volatile
-    var bridgeBytes: Long = 0
-    @Volatile
-    var bridgeErrors: Long = 0
+data class TunDiagnostics(
+    /** Whether the bridge process is alive. */
+    val bridgeAlive: Boolean = false,
 
-    fun storePid(pid: Int) { xrayPid = pid }
+    /** Bridge process PID (or -1 if not running). */
+    val bridgePid: Int = -1,
 
-    fun reset() {
-        rawFd = -1
-        inheritableFd = -1
-        dupOK = false
-        inboundType = "unknown"
-        numInbounds = 0
-        processArgs = ""
-        xrayPid = -1
-        socks5Listening = false
-        tunReadAttempts = 0
-        bridgeRunning = false
-        bridgePackets = 0
-        bridgeBytes = 0
-        bridgeErrors = 0
+    /** Exit code from last nativeWaitFor (-2=timeout, -1=ECHILD, 0-127=exit, 128+=signal). */
+    val bridgeExitCode: Int = -1,
+
+    /** Bridge process exit/reap message. */
+    val bridgeExitMessage: String = "Bridge not started",
+
+    /** The TUN interface name (e.g. "tun0"). */
+    val tunName: String = "",
+
+    /** Total packets read from TUN since last diagnostics poll. */
+    val tunReads: Long = 0L,
+
+    /** SOCKS5 proxy address. */
+    val socksHost: String = "127.0.0.1",
+
+    /** SOCKS5 proxy port. */
+    val socksPort: Int = 10808,
+
+    /** Path to the hev-socks5-tunnel binary. */
+    val bridgePath: String = ""
+) {
+    companion object {
+        /** Xray/core engine PID for hard-kill fallback in NovaVpnService. */
+        @Volatile
+        var xrayPid: Int = -1
     }
 }

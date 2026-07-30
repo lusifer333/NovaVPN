@@ -1,17 +1,18 @@
 package com.novavpn.app.service
 
+import timber.log.Timber
+
 /**
- * Minimal JNI bridge to fork()+execv() a native binary while preserving a
- * TUN file descriptor in the child process.
+ * JNI bridge to NativeProcess.c for process lifecycle and tunnel management.
  *
- * Android's [java.lang.ProcessBuilder] internally calls forkAndExec() which
- * closes ALL file descriptors >= 3 before exec() — making it impossible to
- * pass the TUN fd (from VpnService.Builder.establish()) to native binaries
- * such as hev-socks5-tunnel.
+ * All native methods map 1:1 to C functions in app/src/main/cpp/NativeProcess.c.
  *
- * This class bypasses the JVM's process-spawning machinery and invokes
- * fork() / execv() directly via JNI, which respects POSIX FD_CLOEXEC
- * semantics and keeps the TUN fd open in the child.
+ * Responsibilities:
+ *   - Launch engine binaries via fork+exec (Xray only, no fd passing)
+ *   - Monitor process state (isAlive / waitFor / kill)
+ *   - Discover the TUN interface name from its file descriptor
+ *   - Start/stop hev-socks5-tunnel via in-process library API
+ *   - Query tunnel traffic statistics
  */
 object NativeBridgeRunner {
 
@@ -19,40 +20,117 @@ object NativeBridgeRunner {
         System.loadLibrary("nativebridge")
     }
 
+    // ═══════════════════════════════════════════
+    // Process lifecycle (fork+exec — used by Xray)
+    // ═══════════════════════════════════════════
+
     /**
-     * Fork a child process, clear FD_CLOEXEC on [tunFd], redirect stdout/
-     * stderr to [logFilePath], then exec [binaryPath].
+     * Fork+exec an engine binary.
      *
-     * @param binaryPath  absolute path to the executable
-     * @param args        arguments (NOT including the binary path itself)
-     * @param tunFd       TUN file descriptor to preserve in the child
-     * @param logFilePath optional path to capture stdout+stderr (empty = skip)
-     * @return child PID (positive) on success, or a negative errno on failure
+     * @param binaryPath  Absolute path to the executable
+     * @param args        CLI arguments (excluding argv[0] which is binaryPath)
+     * @param logFilePath Path to capture stderr (null = discard stderr)
+     * @return Child PID on success
+     * @throws RuntimeException on fork/exec failure
      */
+    @JvmStatic
     external fun nativeForkExec(
         binaryPath: String,
         args: Array<String>,
-        tunFd: Int,
-        logFilePath: String
+        logFilePath: String? = null
     ): Int
 
     /**
-     * Check whether a child process is still alive.
-     * Uses waitpid(WNOHANG) — reaps the child on first call.
-     * @return 1 = alive, 0 = exited/reaped
+     * Non-blocking check whether the child process is still running.
+     * Uses waitpid(WNOHANG) internally.
      */
-    external fun nativeIsAlive(pid: Int): Int
+    @JvmStatic
+    external fun nativeIsAlive(pid: Int): Boolean
 
     /**
-     * Busy-poll waitpid(WNOHANG) for up to [timeoutMs] ms, then reap the
-     * child and return its exit code.
+     * Block until the child exits or timeout expires.
      *
-     * @return exit code (0–255), -1 on waitpid error, -2 on timeout
+     * @return exit code (0-127), 128+signal on signal death,
+     *         -1 if already reaped (ECHILD), -2 on timeout
      */
+    @JvmStatic
     external fun nativeWaitFor(pid: Int, timeoutMs: Int): Int
 
     /**
-     * Send SIGTERM then (after 200 ms) SIGKILL to [pid].
+     * Terminate a child process (SIGTERM + SIGKILL fallback).
      */
+    @JvmStatic
     external fun nativeKillProcess(pid: Int)
+
+    /**
+     * Retrieve the TUN interface name (e.g. "tun0") from the fd
+     * returned by VpnService.Builder.establish().
+     *
+     * Uses TUNGETIFF ioctl internally.
+     */
+    @JvmStatic
+    external fun nativeGetTunName(tunFd: Int): String
+
+    // ═══════════════════════════════════════════
+    // In-process tunnel library API (hev-socks5-tunnel)
+    // ═══════════════════════════════════════════
+
+    /**
+     * Start hev-socks5-tunnel in a background pthread, passing the VpnService
+     * TUN fd directly. The library handles all TUN I/O internally.
+     *
+     * The library API call [hev_socks5_tunnel_main_from_file] blocks until
+     * [nativeStopTunnel] is called.
+     *
+     * @param configPath Absolute path to the YAML config file
+     * @param tunFd      TUN fd from VpnService.Builder.establish()
+     * @return true if the tunnel thread was started, false if already running
+     */
+    @JvmStatic
+    external fun nativeStartTunnel(configPath: String, tunFd: Int): Boolean
+
+    /**
+     * Signal the tunnel to stop. Calls hev_socks5_tunnel_quit().
+     * The tunnel thread exits asynchronously.
+     */
+    @JvmStatic
+    external fun nativeStopTunnel()
+
+    /**
+     * Check whether the tunnel thread is currently running.
+     */
+    @JvmStatic
+    external fun nativeGetTunnelRunning(): Boolean
+
+    /**
+     * Retrieve tunnel traffic statistics.
+     *
+     * @return LongArray of [txPackets, txBytes, rxPackets, rxBytes],
+     *         or null if native call failed
+     */
+    @JvmStatic
+    external fun nativeGetTunnelStats(): LongArray?
+
+    /** Human-readable diagnostics for a forked process (Xray). */
+    fun diagnostics(pid: Int): Triple<Boolean, Int, String> {
+        if (pid <= 0) return Triple(false, -1, "Bridge not started (pid <= 0)")
+
+        return try {
+            val alive = nativeIsAlive(pid)
+            if (alive) {
+                Triple(true, -1, "Bridge process $pid is running")
+            } else {
+                val exitStatus = nativeWaitFor(pid, 0)
+                Triple(false, exitStatus, when (exitStatus) {
+                    -1 -> "Bridge process $pid already reaped (ECHILD)"
+                    else -> "Bridge process $pid exited with status $exitStatus"
+                })
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "diagnostics(%d) failed", pid)
+            Triple(false, -1, "Bridge diagnostics error: ${e.message}")
+        }
+    }
+
+    private const val TAG = "NativeBridge"
 }

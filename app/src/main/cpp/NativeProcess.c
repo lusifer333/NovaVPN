@@ -1,247 +1,184 @@
-/**
- * NativeProcess.c
+/*
+ * NativeProcess.c — JNI bridge for hev-socks5-tunnel library API
  *
- * Minimal JNI bridge for fork()+execv() that preserves a TUN file descriptor
- * across the child process boundary.
+ * Calls upstream hev-socks5-tunnel v2.16.0 library API directly in-process,
+ * passing the VpnService TUN file descriptor. No fork/exec, no custom CLI.
  *
- * WHY this exists instead of ProcessBuilder:
- *   Android's forkAndExec() (in ProcessImpl_md.c) closes ALL fds >= 3 before
- *   exec(), regardless of FD_CLOEXEC.  This makes it impossible to pass a TUN
- *   fd (from VpnService.Builder.establish()) to a sub-process (hev-socks5-
- *   tunnel) via Java-level ProcessBuilder or Runtime.exec().
- *
- *   This native implementation calls fork() directly, clears FD_CLOEXEC on the
- *   TUN fd in the child, then execv().  The kernel POSIX semantics guarantee
- *   that a non-CLOEXEC fd survives exec() when called this way.
- *
- * Stdout/stderr from the child are redirected to a log file (logFilePath)
- * so that if the bridge binary crashes immediately after execv, its dying
- * words are captured for diagnostics.
+ * Library API (from <hev-socks5-tunnel.h>):
+ *   hev_socks5_tunnel_main_from_file(config_path, tun_fd) — BLOCKS until quit
+ *   hev_socks5_tunnel_quit()                               — signals stop
+ *   hev_socks5_tunnel_stats(...)                           — traffic counters
  */
 
 #include <jni.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
-#include <errno.h>
-#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <android/log.h>
 
-/* ───────────────────────────────────────────────────────────────────────────
- * Helper: build a NULL-terminated argv[] from a Java String[].
- * Returns allocated array (caller must free both the array and each element).
- * On failure sets *err_out and returns NULL.
- */
-static char **build_argv(JNIEnv *env, const char *binary, jobjectArray args,
-                          int *err_out) {
-    jsize arg_count = (*env)->GetArrayLength(env, args);
-    char **argv = malloc((arg_count + 2) * sizeof(char *));
-    if (!argv) { *err_out = ENOMEM; return NULL; }
+#include <hev-socks5-tunnel.h>
 
-    argv[0] = strdup(binary);
-    if (!argv[0]) { free(argv); *err_out = ENOMEM; return NULL; }
+#define LOG_TAG "NativeBridge"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-    for (jsize i = 0; i < arg_count; i++) {
-        jstring js = (jstring)(*env)->GetObjectArrayElement(env, args, i);
-        const char *utf = (*env)->GetStringUTFChars(env, js, NULL);
-        if (!utf) {
-            for (jsize j = 0; j <= i; j++) free(argv[j]);
-            free(argv);
-            *err_out = ENOMEM;
-            return NULL;
-        }
-        argv[i + 1] = strdup(utf);
-        (*env)->ReleaseStringUTFChars(env, js, utf);
-        if (!argv[i + 1]) {
-            for (jsize j = 0; j <= i; j++) free(argv[j]);
-            free(argv);
-            *err_out = ENOMEM;
-            return NULL;
-        }
-    }
-    argv[arg_count + 1] = NULL;
-    return argv;
-}
+/* Forward declaration of the tunnel thread function */
+static void *tunnel_thread_entry(void *arg);
 
-static void free_argv(char **argv, jsize arg_count) {
-    for (jsize i = 0; i <= arg_count; i++) {
-        if (argv[i]) free(argv[i]);
-    }
-    free(argv);
-}
+/* Per-call state for the tunnel thread */
+typedef struct {
+    char *config_path;     /* owned, freed by thread */
+    int tun_fd;            /* VpnService TUN fd (closed after tunnel returns) */
+} TunnelStartArgs;
 
-/* ───────────────────────────────────────────────────────────────────────────
- * Helper: open a log file and redirect stdout+stderr to it.
- * Called in the child process before execv().
- */
-static void redirect_stdio_to_file(const char *logPath) {
-    if (!logPath || logPath[0] == '\0') return;
+static pthread_t tunnel_thread_id;
+static volatile int tunnel_running;
 
-    int logFd = open(logPath,
-                     O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
-                     S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    if (logFd < 0) return;
-
-    dup2(logFd, STDOUT_FILENO);
-    dup2(logFd, STDERR_FILENO);
-    close(logFd);
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
- * JNI: nativeForkExec
+/* ──────────────────────────────────────────────
+ * JNI: nativeStartTunnel(configPath: String, tunFd: Int): Boolean
  *
- * Signature:
- *   static native int nativeForkExec(String binaryPath, String[] args,
- *                                     int tunFd, String logFilePath);
- *
- *   binaryPath   – absolute path to the executable
- *   args         – command-line arguments (NOT including the binary path)
- *   tunFd        – TUN fd to preserve in the child (FD_CLOEXEC cleared)
- *   logFilePath   – optional path to capture stdout+stderr (empty = no capture)
- *
- * Returns:
- *   > 0  – child PID (process launched successfully)
- *   <= 0 – negative errno on failure (-ENOMEM, -EACCES, …)
- */
-JNIEXPORT jint JNICALL
-Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
+ * Launches hev-socks5-tunnel in a background pthread.
+ * Returns true on success (thread started), false if already running.
+ * The thread joins automatically when the tunnel exits after quit().
+ * ────────────────────────────────────────────── */
+JNIEXPORT jboolean JNICALL
+Java_com_novavpn_app_service_NativeBridgeRunner_nativeStartTunnel(
     JNIEnv *env, jclass clazz,
-    jstring binaryPath, jobjectArray args, jint tunFd,
-    jstring logFilePath) {
-
-    const char *binary = (*env)->GetStringUTFChars(env, binaryPath, NULL);
-    if (!binary) return -ENOMEM;
-
-    const char *logPath = NULL;
-    if (logFilePath) {
-        logPath = (*env)->GetStringUTFChars(env, logFilePath, NULL);
+    jstring config_path_j, jint tun_fd)
+{
+    if (tunnel_running) {
+        LOGE("nativeStartTunnel: tunnel already running");
+        return JNI_FALSE;
     }
 
-    /* Build argv[] */
-    int err = 0;
-    char **argv = build_argv(env, binary, args, &err);
-    if (!argv) {
-        (*env)->ReleaseStringUTFChars(env, binaryPath, binary);
-        if (logPath) (*env)->ReleaseStringUTFChars(env, logFilePath, logPath);
-        return -err;
-    }
-    jsize arg_count = (*env)->GetArrayLength(env, args);
-
-    /* ── fork() ── */
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        /* ─── CHILD ─── */
-
-        /* Clear FD_CLOEXEC on the TUN fd so it survives execv().
-         * Belt-and-suspenders: Os.dup() in Java already produced a
-         * non-CLOEXEC copy, but guard against any regression.  If
-         * fcntl() silently fails on vendor ROMs the dup'd fd has no
-         * CLOEXEC anyway, so this is purely defensive. */
-        fcntl(tunFd, F_SETFD, 0);
-
-        /* Set O_NONBLOCK on the TUN fd — hev-socks5-tunnel expects
-         * non-blocking I/O for its epoll-based event loop.  We use
-         * F_GETFL first to preserve any existing flags (O_RDWR, etc.)
-         * rather than raw F_SETFL which would clobber them. */
-        int fl = fcntl(tunFd, F_GETFL, 0);
-        if (fl >= 0) fcntl(tunFd, F_SETFL, fl | O_NONBLOCK);
-
-        /* Capture stdout+stderr so bridge crash output is visible */
-        redirect_stdio_to_file(logPath);
-
-        /* Replace process image with the bridge binary */
-        execv(binary, argv);
-
-        /* Only reached on execv failure */
-        _exit(errno);
+    const char *path_utf = (*env)->GetStringUTFChars(env, config_path_j, NULL);
+    if (!path_utf) {
+        LOGE("nativeStartTunnel: GetStringUTFChars failed");
+        return JNI_FALSE;
     }
 
-    /* ─── PARENT ─── */
-    free_argv(argv, arg_count);
-    (*env)->ReleaseStringUTFChars(env, binaryPath, binary);
-    if (logPath) (*env)->ReleaseStringUTFChars(env, logFilePath, logPath);
+    TunnelStartArgs *args = malloc(sizeof(TunnelStartArgs));
+    if (!args) {
+        LOGE("nativeStartTunnel: malloc failed");
+        (*env)->ReleaseStringUTFChars(env, config_path_j, path_utf);
+        return JNI_FALSE;
+    }
 
-    if (pid < 0) return -errno;
-    return (jint)pid;
+    args->config_path = strdup(path_utf);
+    args->tun_fd = (int)tun_fd;
+    (*env)->ReleaseStringUTFChars(env, config_path_j, path_utf);
+
+    if (!args->config_path) {
+        LOGE("nativeStartTunnel: strdup failed");
+        free(args);
+        return JNI_FALSE;
+    }
+
+    tunnel_running = 1;
+
+    int ret = pthread_create(&tunnel_thread_id, NULL,
+                             tunnel_thread_entry, args);
+    if (ret != 0) {
+        LOGE("nativeStartTunnel: pthread_create failed: %d", ret);
+        tunnel_running = 0;
+        free(args->config_path);
+        free(args);
+        return JNI_FALSE;
+    }
+
+    /* Detach — the thread cleans up and exits on its own */
+    pthread_detach(tunnel_thread_id);
+
+    LOGI("nativeStartTunnel: started (config=%s, fd=%d)", path_utf, tun_fd);
+    return JNI_TRUE;
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
- * JNI: nativeIsAlive
- *
- * Checks whether a child process is still alive using waitpid(WNOHANG).
- * Reaps the child status — once a process has exited, subsequent calls
- * return 0.
- *
- * Returns:
- *   1  – process is still running
- *   0  – process has exited (or was already reaped)
- */
-JNIEXPORT jint JNICALL
-Java_com_novavpn_app_service_NativeBridgeRunner_nativeIsAlive(
-    JNIEnv *env, jclass clazz, jint pid) {
+/* ──────────────────────────────────────────────
+ * Tunnel thread: calls the blocking library API.
+ * When hev_socks5_tunnel_quit() is called from another thread,
+ * the library unblocks and this function returns.
+ * ────────────────────────────────────────────── */
+static void *tunnel_thread_entry(void *arg)
+{
+    TunnelStartArgs *args = (TunnelStartArgs *)arg;
+    int res;
 
-    if (pid <= 0) return 0;
-    int status;
-    pid_t result = waitpid((pid_t)pid, &status, WNOHANG);
-    return (result == 0) ? 1 : 0;   /* 1 = alive, 0 = dead */
+    LOGI("tunnel thread: entering hev_socks5_tunnel_main_from_file(%s, %d)",
+         args->config_path, args->tun_fd);
+
+    res = hev_socks5_tunnel_main_from_file(args->config_path, args->tun_fd);
+
+    LOGI("tunnel thread: exited with result %d", res);
+
+    /* IMPORTANT: Do NOT close args->tun_fd here.
+     * The TUN fd is owned by NovaVpnService (ParcelFileDescriptor) and
+     * is closed by the service in its own teardown sequence.
+     * The upstream library also does not close it (tun_fd_local stays 0
+     * when fd is passed externally). If we close it here, the service
+     * would be trying to close an already-released fd. */
+
+    tunnel_running = 0;
+
+    free(args->config_path);
+    free(args);
+    return NULL;
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
- * JNI: nativeWaitFor
+/* ──────────────────────────────────────────────
+ * JNI: nativeStopTunnel()
  *
- * Busy-poll waitpid() with WNOHANG for up to timeoutMs milliseconds.
- * Reaps the child and returns its exit code.
- *
- * Returns:
- *   0–255  – child exit code (normal exit)
- *   0–255  – child exit code (even if killed by signal, this is 128+sig)
- *   -1     – waitpid error (ECHILD, etc.)
- *   -2     – timeout (child still alive after timeoutMs)
- */
-JNIEXPORT jint JNICALL
-Java_com_novavpn_app_service_NativeBridgeRunner_nativeWaitFor(
-    JNIEnv *env, jclass clazz, jint pid, jint timeoutMs) {
-
-    if (pid <= 0) return -1;
-
-    int status;
-    int stepMs = 50;
-    int waited = 0;
-
-    while (waited < timeoutMs) {
-        pid_t result = waitpid((pid_t)pid, &status, WNOHANG);
-        if (result == pid) {
-            /* Reaped successfully */
-            if (WIFEXITED(status))  return WEXITSTATUS(status);
-            if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-            return -1;  /* unexpected */
-        }
-        if (result == -1 && errno == ECHILD) return -1;  /* already reaped */
-        /* result == 0 → still running */
-        usleep(stepMs * 1000);
-        waited += stepMs;
-    }
-    return -2;  /* timeout */
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
- * JNI: nativeKillProcess
- *
- * Sends SIGTERM, waits 200 ms, then SIGKILL.
- */
+ * Signals the running tunnel to quit.
+ * The library's quit is asynchronous — the thread exits when it
+ * finishes cleaning up.
+ * ────────────────────────────────────────────── */
 JNIEXPORT void JNICALL
-Java_com_novavpn_app_service_NativeBridgeRunner_nativeKillProcess(
-    JNIEnv *env, jclass clazz, jint pid) {
+Java_com_novavpn_app_service_NativeBridgeRunner_nativeStopTunnel(
+    JNIEnv *env, jclass clazz)
+{
+    if (!tunnel_running) {
+        LOGI("nativeStopTunnel: not running, ignored");
+        return;
+    }
 
-    if (pid <= 0) return;
-    kill((pid_t)pid, SIGTERM);
-    usleep(200000); /* 200 ms grace period */
-    kill((pid_t)pid, SIGKILL);
-    /* Reap immediately so we don't leave a zombie */
-    int status;
-    waitpid((pid_t)pid, &status, WNOHANG);
+    LOGI("nativeStopTunnel: calling hev_socks5_tunnel_quit()");
+    hev_socks5_tunnel_quit();
+}
+
+/* ──────────────────────────────────────────────
+ * JNI: nativeGetTunnelRunning(): Boolean
+ * ────────────────────────────────────────────── */
+JNIEXPORT jboolean JNICALL
+Java_com_novavpn_app_service_NativeBridgeRunner_nativeGetTunnelRunning(
+    JNIEnv *env, jclass clazz)
+{
+    return tunnel_running ? JNI_TRUE : JNI_FALSE;
+}
+
+/* ──────────────────────────────────────────────
+ * JNI: nativeGetTunnelStats(): LongArray?
+ *
+ * Returns [tx_packets, tx_bytes, rx_packets, rx_bytes] or null.
+ * ────────────────────────────────────────────── */
+JNIEXPORT jlongArray JNICALL
+Java_com_novavpn_app_service_NativeBridgeRunner_nativeGetTunnelStats(
+    JNIEnv *env, jclass clazz)
+{
+    size_t tx_packets = 0, tx_bytes = 0;
+    size_t rx_packets = 0, rx_bytes = 0;
+
+    hev_socks5_tunnel_stats(&tx_packets, &tx_bytes,
+                            &rx_packets, &rx_bytes);
+
+    jlong stats[4];
+    stats[0] = (jlong)tx_packets;
+    stats[1] = (jlong)tx_bytes;
+    stats[2] = (jlong)rx_packets;
+    stats[3] = (jlong)rx_bytes;
+
+    jlongArray result = (*env)->NewLongArray(env, 4);
+    if (result) {
+        (*env)->SetLongArrayRegion(env, result, 0, 4, stats);
+    }
+    return result;
 }

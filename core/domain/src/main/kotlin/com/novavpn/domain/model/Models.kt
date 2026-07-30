@@ -223,9 +223,14 @@ data class LogEntry(
  * Supported VPN engines.
  */
 @Serializable
-enum class EngineType(val displayName: String) {
+enum class EngineType(
+    val displayName: String,
+    /** Override lib name for jniLibs (e.g. libhev-socks5-tunnel.so). */
+    val libName: String? = null
+) {
     Xray("Xray Core"),
     SingBox("Sing-box"),
+    HevSocks5Tunnel("hev-socks5-tunnel", libName = "libhev-socks5-tunnel.so"),
     Unknown("Unknown")
 }
 
