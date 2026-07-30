@@ -1,7 +1,6 @@
 package com.novavpn.app.service
 
 import android.content.Context
-import android.system.Os
 import com.novavpn.engine.api.BridgeDiagnostics
 import com.novavpn.engine.api.BridgeStatus
 import com.novavpn.engine.api.TunnelBridge
@@ -80,15 +79,6 @@ class NativeTunnelBridge @Inject constructor(
             ensureBinary()
 
             File(binaryPath).setExecutable(true, false)
-
-            // Make TUN fd inheritable for child process
-            try {
-                val flags = Os.fcntlInt(tunFd, Os.F_GETFD, 0)
-                Os.fcntlInt(tunFd, Os.F_SETFD, flags and Os.FD_CLOEXEC.inv())
-                Timber.tag(TAG).i("TUN_FD_INHERITABLE: fd=%d, old_flags=%d", tunFd, flags)
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "TUN_FD_INHERITABLE_FAILED: fd=%d", tunFd)
-            }
 
             // The binary expects TUN fd and SOCKS5 proxy address
             val cmd = listOf(binaryPath, "--fd", tunFd.toString(), "--socks5", "$socksHost:$socksPort")

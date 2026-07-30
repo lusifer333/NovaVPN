@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import androidx.core.app.NotificationCompat
 import com.novavpn.app.MainActivity
 import com.novavpn.app.R
@@ -239,6 +240,17 @@ class NovaVpnService : VpnService() {
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
+        // Clear FD_CLOEXEC so the TUN fd survives exec() in child processes
+        try {
+            val fd = tun.fileDescriptor
+            // fcntl(fd, F_GETFD, 0) → get flags
+            val flags = Os.fcntlInt(fd, 1, 0)  // F_GETFD = 1
+            // fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC)
+            Os.fcntlInt(fd, 2, flags and 1.inv())  // F_SETFD = 2, FD_CLOEXEC = 1
+            Timber.tag(TAG).i("TUN FD_CLOEXEC cleared: fd=%d", tun.fd)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "TUN FD_CLOEXEC failed: fd=%d", tun.fd)
+        }
         Timber.tag(TAG).i("TUN established: fd=%d, interface=%s",
             tun.fd, NovaConfig.VPN_SESSION_NAME)
 
