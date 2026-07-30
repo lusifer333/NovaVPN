@@ -199,7 +199,15 @@ class XrayEngine @Inject constructor(
                 try {
                     val proc = Runtime.getRuntime().exec(arrayOf("chmod", "755", binFile.absolutePath))
                     proc.waitFor(3, TimeUnit.SECONDS)
-                    Timber.tag(TAG).d("chmod 755 exit: %d", proc.exitValue())
+                    val chmodExit = proc.exitValue()
+                    if (chmodExit != 0) {
+                        val err = proc.errorStream?.bufferedReader()?.readText()?.trim() ?: ""
+                        Timber.tag(TAG).w("chmod 755 exit: %d%s",
+                            chmodExit,
+                            if (err.isNotEmpty()) " — $err" else "")
+                    } else {
+                        Timber.tag(TAG).d("chmod 755 exit: 0 (OK)")
+                    }
                 } catch (e: Exception) {
                     Timber.tag(TAG).w("chmod failed before exec: %s", e.message)
                 }
@@ -239,11 +247,25 @@ class XrayEngine @Inject constructor(
                 }
 
                 // 6. Start the xray subprocess
+                //    🔴 CRITICAL: Bind process to the active network before fork,
+                //    so the Xray child inherits the binding and its outbound
+                //    sockets bypass the TUN interface. Without this,
+                //    addDisallowedApplication may not work on some Android
+                //    versions for child processes of the VPN app itself.
                 val pb = ProcessBuilder(
                     binaryPath, "run", "-c", tempFile.absolutePath
                 )
                 pb.redirectErrorStream(true)
                 pb.environment()?.put("XRAY_LOCATION_ASSET", ".") // if geo files are local
+
+                // Bind before fork so child inherits network binding
+                val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                        as? android.net.ConnectivityManager
+                val activeNet = cm?.activeNetwork
+                if (activeNet != null) {
+                    cm.bindProcessToNetwork(activeNet)
+                    Timber.tag(TAG).i("XRAY_NET_BOUND: process bound to active network (bypasses VPN)")
+                }
 
                 Timber.tag(TAG).i("XRAY_PROCESS_ARGS: %s run -c %s",
                     binaryPath, tempFile.absolutePath)
@@ -251,6 +273,12 @@ class XrayEngine @Inject constructor(
                     "$binaryPath run -c ${tempFile.absolutePath}"
 
                 val xrayProcess = pb.start()
+
+                // Unbind parent process so its own traffic routes through VPN
+                if (activeNet != null) {
+                    cm!!.bindProcessToNetwork(null)
+                    Timber.tag(TAG).i("XRAY_NET_UNBOUND: parent process re-enabled VPN routing")
+                }
                 process = xrayProcess
 
                 // 5. 🔴 CRITICAL: awaitXrayReady MUST run BEFORE startOutputCollector,

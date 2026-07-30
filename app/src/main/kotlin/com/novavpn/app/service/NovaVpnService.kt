@@ -330,6 +330,9 @@ class NovaVpnService : VpnService() {
         }
         bridgeDupFd = dupedFd
         Timber.tag(TAG).i("DUP_OK: rawFd=%d -> inheritableFd=%d", tun.fd, inheritableFd)
+        com.novavpn.domain.model.TunDiagnostics.rawFd = tun.fd
+        com.novavpn.domain.model.TunDiagnostics.inheritableFd = inheritableFd
+        com.novavpn.domain.model.TunDiagnostics.dupOK = true
 
         try {
             tunnelBridge.start(inheritableFd, "127.0.0.1", 10808)
