@@ -12,7 +12,6 @@ import org.junit.Test
 class XrayConfigParserTest {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val dummyTunFd = 42
     private val dns = listOf("8.8.8.8")
     private val routes = listOf("0.0.0.0/0")
 
@@ -223,7 +222,7 @@ class XrayConfigParserTest {
             rawConfig = rawConfig,
             engineFormat = EngineFormat.XrayJson
         )
-        val jsonStr = XrayConfigParser.toXrayJson(config, dummyTunFd, dns, routes)
+        val jsonStr = XrayConfigParser.toXrayJson(config, dns, routes)
         return parseObj(jsonStr)
     }
 }
