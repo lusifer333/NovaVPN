@@ -42,6 +42,7 @@ class XrayEngineTest {
     private val testContext = object : EngineContext {
         override val isVpnPermissionGranted = true
         override val tunFileDescriptor = 42
+        override val tunName = "tun0"
         override val dnsServers = listOf("8.8.8.8")
         override val routes = listOf("0.0.0.0/0")
     }
