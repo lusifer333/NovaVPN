@@ -61,7 +61,7 @@ fi
 echo ""
 echo "--- hev-socks5-tunnel ($ARCH) ---"
 
-TUNNEL_BIN="$JNILIBS_DIR/$ARCH/hev-socks5-tunnel"
+TUNNEL_BIN="$JNILIBS_DIR/$ARCH/libhev-socks5-tunnel.so"
 
 if [ -f "$TUNNEL_BIN" ] && [ "$(head -c 3 "$TUNNEL_BIN")" != "#!/" ]; then
   echo "  Already exists: $TUNNEL_BIN ($(du -h "$TUNNEL_BIN" | cut -f1))"

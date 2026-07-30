@@ -39,7 +39,7 @@ class NativeTunnelBridge @Inject constructor(
 
     companion object {
         private const val TAG = "TunnelBridge"
-        private const val BINARY_NAME = "hev-socks5-tunnel"
+        private const val BINARY_NAME = "libhev-socks5-tunnel.so"
         private const val BRIDGE_TIMEOUT_SEC = 5
     }
 
@@ -164,17 +164,13 @@ class NativeTunnelBridge @Inject constructor(
         // 1. Try nativeLibraryDir (where Android extracts jniLibs)
         val nativeLibDir = context.applicationInfo.nativeLibraryDir ?: ""
         val nativePath = "$nativeLibDir/$BINARY_NAME"
-        val nativeLibPath = "$nativeLibDir/lib${BINARY_NAME}.so"
-        val possiblePaths = listOf(nativePath, nativeLibPath)
 
-        for (path in possiblePaths) {
-            val file = File(path)
-            if (file.exists() && file.canExecute()) {
-                binaryPath = path
-                Timber.tag(TAG).i("BRIDGE_BINARY_FOUND: nativeLib=%s (%d KB)",
-                    path, file.length() / 1024)
-                return
-            }
+        val file = File(nativePath)
+        if (file.exists() && file.canExecute()) {
+            binaryPath = nativePath
+            Timber.tag(TAG).i("BRIDGE_BINARY_FOUND: nativeLib=%s (%d KB)",
+                nativePath, file.length() / 1024)
+            return
         }
 
         // 2. Extract from APK zip (always available)
@@ -192,10 +188,10 @@ class NativeTunnelBridge @Inject constructor(
         // 3. Nothing worked — hard failure, no diagnostic mode
         val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
         val msg = buildString {
-            appendLine("hev-socks5-tunnel binary NOT FOUND!")
-            appendLine("  Looked in nativeLibraryDir: $nativeLibDir/$BINARY_NAME")
-            appendLine("  APK zip entry: lib/$abi/$BINARY_NAME")
-            appendLine("  Expected location: app/src/main/jniLibs/$abi/$BINARY_NAME")
+            appendLine("libhev-socks5-tunnel.so binary NOT FOUND!")
+            appendLine("  Looked in nativeLibraryDir: $nativeLibDir")
+            appendLine("  APK zip entry: lib/$abi/libhev-socks5-tunnel.so")
+            appendLine("  Expected location: app/src/main/jniLibs/$abi/libhev-socks5-tunnel.so")
             appendLine("  Run: scripts/download-engines.sh")
         }
         Timber.tag(TAG).w(msg)
