@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
 
+# Assembly language (for hev-task-execute.S → hev_task_execute)
+enable_language(ASM)
+
 # ============================================================================
 # hev-socks5-tunnel v2.16.0 — static library for Android (NDK)
 # Official upstream: https://github.com/heiher/hev-socks5-tunnel
@@ -109,6 +112,7 @@ set(LWIP_SOURCES
 
 set(HEV_TASK_SOURCES
     "${HEV_SRC}/third-part/hev-task-system/src/lib/misc/hev-debugger.c"
+    "${HEV_SRC}/third-part/hev-task-system/src/lib/misc/hev-task-stack-detector.c"
     "${HEV_SRC}/third-part/hev-task-system/src/lib/list/hev-list.c"
     "${HEV_SRC}/third-part/hev-task-system/src/lib/object/hev-object.c"
     "${HEV_SRC}/third-part/hev-task-system/src/lib/object/hev-object-atomic.c"
