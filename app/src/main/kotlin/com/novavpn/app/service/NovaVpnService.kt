@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import androidx.core.app.NotificationCompat
 import com.novavpn.app.MainActivity
 import com.novavpn.app.R
@@ -239,6 +240,17 @@ class NovaVpnService : VpnService() {
             updateNotification("TUN failed"); return
         }
         tunInterface = tun
+        // Clear FD_CLOEXEC on the original TUN fd so child processes
+        // (Xray, hev-socks5-tunnel) can inherit it across exec().
+        // android.system.Os is only available on API 29+, so on older
+        // devices the bridge/Xray will fail gracefully (legacy gap).
+        try {
+            val fdesc = tun.fileDescriptor
+            Os.fcntlInt(fdesc, 2, 0)  // F_SETFD = 2, clear all flags (including FD_CLOEXEC)
+            Timber.tag(TAG).i("FD_CLOEXEC cleared: fd=%d", tun.fd)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w("FD_CLOEXEC clear failed (API <29?): %s", e.message)
+        }
         Timber.tag(TAG).i("TUN established: fd=%d, interface=%s",
             tun.fd, NovaConfig.VPN_SESSION_NAME)
 
@@ -299,23 +311,8 @@ class NovaVpnService : VpnService() {
         // ── CHECK CANCELLATION before bridge start ──
         currentCoroutineContext().ensureActive()
         Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STARTING")
-        // Create an inheritable (non-CLOEXEC) copy of the TUN fd for the bridge
-        val bridgeFd = try {
-            val rawFd = tun.fd
-            val fd = java.io.FileDescriptor()
-            val field = java.io.FileDescriptor::class.java.getDeclaredField("descriptor")
-            field.isAccessible = true
-            field.setInt(fd, rawFd)
-            val duped = android.system.Os.dup(fd)
-            val dupFdNum = field.getInt(duped)
-            Timber.tag(TAG).i("BRIDGE_FD_DUP: rawFd=%d, dupFd=%d", rawFd, dupFdNum)
-            dupFdNum
-        } catch (e: Exception) {
-            Timber.tag(TAG).w("BRIDGE_FD_DUP_FAILED: using raw fd — %s", e.message)
-            tun.fd
-        }
         try {
-            tunnelBridge.start(bridgeFd, "127.0.0.1", 10808)
+            tunnelBridge.start(tun.fd, "127.0.0.1", 10808)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "LIFECYCLE: BRIDGE_START_FAILED → %s", e.message)
             connectUseCase.updateState(VpnState.Error("Bridge failed: ${e.message}"))
