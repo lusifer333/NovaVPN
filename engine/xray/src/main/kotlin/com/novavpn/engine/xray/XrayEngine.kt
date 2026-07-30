@@ -267,7 +267,7 @@ class XrayEngine @Inject constructor(
                     val errMsg = "Config validation FAILED (exit=$testExitCode): ${testOutput.take(200)}"
                     Timber.tag(TAG).e("XRAY_CONFIG_TEST_FAILED: %s", errMsg)
                     return@withLock Result.failure(
-                        EngineError(EngineError.ErrorCode.CONFIG_ERROR,
+                        EngineError(EngineError.ErrorCode.CONFIG_PARSE_FAILURE,
                             "Xray config invalid: ${testOutput.take(100)}")
                     )
                 }
