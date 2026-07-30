@@ -13,12 +13,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import timber.log.Timber
 import java.io.File
 import java.io.FileDescriptor
@@ -37,15 +41,20 @@ import kotlinx.coroutines.sync.withLock
  * - Config generation via [XrayConfigParser]
  * - Temporary config file management
  * - Process start / stop / health-check
- * - Runtime state emissions ([Idle] → [Starting] → [Running] → [Stopping] → [Idle])
+ * - Runtime state emissions ([Idle] → [Preparing] → [Starting] → [Running] → [Stopping] → [Idle])
  *
- * Thread safety is guaranteed by a [Mutex] that serialises all
- * process-affecting operations on [Dispatchers.IO].
+ * ## Thread safety
  *
- * ## Hilt wiring
- * A companion [Module] binds this class into the engine multibinding map
- * under [EngineType.Xray] so that [com.novavpn.engine.api.EngineManagerImpl]
- * can discover and activate it.
+ * - [start] uses a [Mutex] to prevent concurrent starts.
+ * - [stop] does NOT use the mutex (avoids deadlock when Xray hangs during initialisation).
+ * - `process` and related state fields are `@Volatile` for safe direct access.
+ *
+ * ## Why stop() doesn't use the mutex
+ *
+ * If Xray freezes during its init phase, the blocking portion inside `start()`'s
+ * mutex-withLock prevents `stop()` from ever acquiring the lock.  Instead,
+ * `stop()` directly destroys the OS subprocess via `@Volatile process`, then
+ * synchronises state under the mutex only for the remaining cleanup.
  *
  * @see Engine
  * @see XrayConfigParser
@@ -92,8 +101,8 @@ class XrayEngine @Inject constructor(
     @Volatile
     private var configFile: File? = null
 
-    /** Serialises all process-affecting operations. */
-    private val mutex = Mutex()
+    /** Serialises *start* only — stop() bypasses this to avoid deadlock. */
+    private val startMutex = Mutex()
 
     /** Coroutine scope for background tasks (output collection, process watching). */
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -147,7 +156,7 @@ class XrayEngine @Inject constructor(
     }
 
     override suspend fun start(config: ServerConfig): Result<Unit> = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        startMutex.withLock {
             Timber.tag(TAG).i("Starting Xray engine with config '%s' (%s:%d, protocol=%s)",
                 config.name, config.address, config.port, config.protocol)
 
@@ -179,9 +188,6 @@ class XrayEngine @Inject constructor(
                     throw EngineError(EngineError.ErrorCode.TUN_SETUP_FAILED, "Invalid TUN fd for child: $rawTunFd")
                 }
 
-                // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
-                // On Android 12+, ParcelFileDescriptor from VpnService.Builder has
-                // FD_CLOEXEC set, so the fd is closed in the child after fork/exec.
                 // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
                 inheritableTunFd = createInheritableTunFd(rawTunFd)
                 val dupFailed = inheritableTunFd == rawTunFd
@@ -253,8 +259,17 @@ class XrayEngine @Inject constructor(
                 Timber.tag(TAG).i("Config validation: exit=%d, output:\n%s",
                     testExitCode, testOutput.take(1000))
 
+                // ════════════════════════════════════════════════════════════════
+                // HARD FAIL on config validation error
+                // ════════════════════════════════════════════════════════════════
                 if (testExitCode != 0) {
-                    Timber.tag(TAG).w("Xray config validation FAILED — check Program Logs for details")
+                    _state.value = EngineRuntimeState.Crashed
+                    val errMsg = "Config validation FAILED (exit=$testExitCode): ${testOutput.take(200)}"
+                    Timber.tag(TAG).e("XRAY_CONFIG_TEST_FAILED: %s", errMsg)
+                    return@withLock Result.failure(
+                        EngineError(EngineError.ErrorCode.CONFIG_ERROR,
+                            "Xray config invalid: ${testOutput.take(100)}")
+                    )
                 }
 
                 // 6. Start the xray subprocess
@@ -282,91 +297,66 @@ class XrayEngine @Inject constructor(
                 // 5. Start process output collector (reads stdout/stderr)
                 startOutputCollector(xrayProcess)
 
-                // 6. Wait for Xray to initialize (check for stderr errors)
-                val initWaitMs = 3000L
-                val startTime = System.currentTimeMillis()
-                var processStillAlive = false
-                var lastOutput = ""
+                // 6. Cancellable init wait loop — checks actual running marker
+                val initResult = awaitXrayReady(xrayProcess)
 
-                while (System.currentTimeMillis() - startTime < initWaitMs) {
-                    if (!xrayProcess.isAlive) {
-                        // Process exited during init
-                        val exitCode = xrayProcess.exitValue()
-                        val errorOutput = try {
-                            xrayProcess.inputStream.bufferedReader().readText()
-                        } catch (_: Exception) { "" }
-                        Timber.tag(TAG).e("XRAY_DIED: exit=%d, output:\n%s", exitCode, errorOutput.take(1000))
-                        _state.value = EngineRuntimeState.Crashed
-                        process = null
-                        return@withLock Result.failure(
-                            EngineError(EngineError.ErrorCode.ENGINE_CRASH,
-                                "Xray exited during init (code=$exitCode): ${errorOutput.take(200)}")
-                        )
-                    }
+                if (initResult === ReadyResult.READY) {
+                    // ✅ Xray is alive, confirming Running
+                    _state.value = EngineRuntimeState.Running
 
-                    // Read any available output (non-blocking)
+                    // Store PID and alive state
                     try {
-                        val avail = xrayProcess.inputStream.available()
-                        if (avail > 0) {
-                            val buf = ByteArray(avail.coerceAtMost(4096))
-                            xrayProcess.inputStream.read(buf, 0, buf.size)
-                            val chunk = String(buf, Charsets.UTF_8)
-                            lastOutput += chunk
-                            // Check for fatal errors
-                            if (chunk.contains("permission denied", ignoreCase = true) ||
-                                chunk.contains("failed to start", ignoreCase = true)) {
-                                Timber.tag(TAG).w("XRAY_ERROR_DURING_INIT: %s", chunk.take(500))
-                            }
-                            // Success marker
-                            if (chunk.contains("running inbound", ignoreCase = true)) {
-                                Timber.tag(TAG).i("XRAY_INBOUND_READY: %s", chunk.take(200))
-                            }
-                        }
+                        val pidF = xrayProcess.javaClass.getDeclaredField("pid")
+                        pidF.isAccessible = true
+                        val pidVal = pidF.getInt(xrayProcess)
+                        TunDiagnostics.storePid(pidVal)
                     } catch (_: Exception) { }
 
-                    Thread.sleep(100)
-                }
-
-                processStillAlive = xrayProcess.isAlive
-
-                // Store PID and alive state
-                val xrayPid = -1 // Process.pid() not available on Android
-                try {
-                    val pidF = xrayProcess.javaClass.getDeclaredField("pid")
-                    pidF.isAccessible = true
-                    val pidVal = pidF.getInt(xrayProcess)
-                    TunDiagnostics.storePid(pidVal)
-                } catch (_: Exception) { }
-
-                TunDiagnostics.processArgs = "$binaryPath run -c ${tempFile.absolutePath}"
-                Timber.tag(TAG).i("XRAY_LIFECYCLE: alive=%s, initMs=%d, errorsInLog=%s",
-                    processStillAlive,
-                    System.currentTimeMillis() - startTime,
-                    lastOutput.contains("permission denied"))
-
-                if (processStillAlive) {
-                    _state.value = EngineRuntimeState.Running
                     Timber.tag(TAG).i("XRAY_READY: rawFd=%d, inheritFd=%d, dupOK=%s",
                         rawTunFd, inheritableTunFd,
                         rawTunFd != inheritableTunFd)
-
-                    // Full stderr dump for diagnostics
-                    if (lastOutput.isNotBlank()) {
-                        Timber.tag(TAG).i("XRAY_STDERR_DUMP:\n%s", lastOutput.take(2000))
-                    }
                     Result.success(Unit)
                 } else {
-                    val errorOutput = try {
-                        xrayProcess.inputStream.bufferedReader().readText()
-                    } catch (_: Exception) { "" }
-                    _state.value = EngineRuntimeState.Crashed
+                    // ❌ Xray died, timed out, or cancelled — kill and fail
+                    val reason = when (initResult) {
+                        ReadyResult.DIED -> {
+                            val exitCode = xrayProcess.exitValue()
+                            val errorOutput = try {
+                                xrayProcess.inputStream.bufferedReader().readText()
+                            } catch (_: Exception) { "" }
+                            "Xray died during init (code=$exitCode): ${errorOutput.take(200)}"
+                        }
+                        ReadyResult.TIMEOUT -> {
+                            "Xray did NOT emit 'running inbound' within init window — killing"
+                        }
+                        else -> "Xray init cancelled by Cancel/Timeout"
+                    }
+                    Timber.tag(TAG).e("XRAY_INIT_FAILED: %s", reason)
+                    hardKillProcess(xrayProcess)
                     process = null
-                    Timber.tag(TAG).e("XRAY_DIED_AFTER_INIT:\n%s", errorOutput.take(1000))
-                    Result.failure(
-                        EngineError(EngineError.ErrorCode.ENGINE_CRASH,
-                            "Xray exited: $errorOutput".take(200))
+                    _state.value = EngineRuntimeState.Crashed
+                    return@withLock Result.failure(
+                        EngineError(EngineError.ErrorCode.ENGINE_CRASH, reason)
                     )
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                // from awaitXrayReady if the outer withTimeout fires
+                Timber.tag(TAG).e(e, "XRAY_START_TIMEOUT: engine start exceeded timeout")
+                hardKillProcess(process)
+                process = null
+                _state.value = EngineRuntimeState.Crashed
+                cleanup()
+                Result.failure(
+                    EngineError(EngineError.ErrorCode.ENGINE_CRASH,
+                        "Xray engine start timed out")
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Connection was cancelled — kill Xray before propagating
+                Timber.tag(TAG).w(e, "XRAY_START_CANCELLED: %s", e.message)
+                hardKillProcess(process)
+                process = null
+                cleanup()
+                throw e
             } catch (e: Exception) {
                 _state.value = EngineRuntimeState.Crashed
                 Timber.tag(TAG).e(e, "Failed to start Xray engine")
@@ -382,34 +372,110 @@ class XrayEngine @Inject constructor(
         }
     }
 
-    override suspend fun stop(): Result<Unit> = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            val current = _state.value
-            if (current == EngineRuntimeState.Idle || current == EngineRuntimeState.Stopping) {
-                Timber.tag(TAG).w("stop() called but engine is already $current — no-op")
-                return@withLock Result.success(Unit)
+    // ------------------------------------------------------------------
+    // Init wait helper — cancellable and marker-based
+    // ------------------------------------------------------------------
+
+    private enum class ReadyResult { READY, DIED, TIMEOUT, CANCELLED }
+
+    /**
+     * Wait up to [INIT_WAIT_MS] for Xray to emit its "running inbound" marker.
+     *
+     * Cancellation-safe: uses [delay] and [ensureActive] instead of
+     * `Thread.sleep()`, so a cancelled coroutine exits immediately.
+     */
+    private suspend fun awaitXrayReady(xrayProcess: Process): ReadyResult {
+        val initWaitMs = 3000L
+        val startTime = System.currentTimeMillis()
+        var lastOutput = ""
+
+        while (System.currentTimeMillis() - startTime < initWaitMs) {
+            // 🎯 CANCELLATION CHECKPOINT — this is why we use delay, not Thread.sleep
+            currentCoroutineContext().ensureActive()
+
+            if (!xrayProcess.isAlive) {
+                // Read remaining output
+                val errorOutput = try {
+                    xrayProcess.inputStream.bufferedReader().readText()
+                } catch (_: Exception) { "" }
+                Timber.tag(TAG).e("XRAY_DIED: output=\n%s", errorOutput.take(1000))
+                return ReadyResult.DIED
             }
 
-            _state.value = EngineRuntimeState.Stopping
-            Timber.tag(TAG).i("Stopping Xray engine")
-
+            // Read any available output (non-blocking)
             try {
-                destroyProcess()
-                cleanup()
-                _state.value = EngineRuntimeState.Idle
-                Timber.tag(TAG).i("Xray engine stopped successfully")
-                Result.success(Unit)
-            } catch (e: Exception) {
-                _state.value = EngineRuntimeState.Crashed
-                Timber.tag(TAG).e(e, "Error while stopping Xray engine")
-                Result.failure(
-                    EngineError(
-                        code = EngineError.ErrorCode.UNKNOWN,
-                        message = "Failed to stop Xray engine: ${e.message}",
-                        cause = e
-                    )
+                val avail = xrayProcess.inputStream.available()
+                if (avail > 0) {
+                    val buf = ByteArray(avail.coerceAtMost(4096))
+                    xrayProcess.inputStream.read(buf, 0, buf.size)
+                    val chunk = String(buf, Charsets.UTF_8)
+                    lastOutput += chunk
+
+                    // Check for fatal errors
+                    if (chunk.contains("permission denied", ignoreCase = true) ||
+                        chunk.contains("failed to start", ignoreCase = true)) {
+                        Timber.tag(TAG).w("XRAY_ERROR_DURING_INIT: %s", chunk.take(500))
+                    }
+
+                    // ✅ SUCCESS MARKER — Xray confirmed it's running
+                    if (chunk.contains("running inbound", ignoreCase = true)) {
+                        Timber.tag(TAG).i("XRAY_INBOUND_READY: %s", chunk.take(200))
+                        if (lastOutput.isNotBlank()) {
+                            Timber.tag(TAG).i("XRAY_STDERR_DUMP:\n%s", lastOutput.take(2000))
+                        }
+                        return ReadyResult.READY
+                    }
+                }
+            } catch (_: Exception) { }
+
+            // 🎯 CANCELLATION SAFE — delay respects coroutine cancellation
+            // Using delay(100) instead of Thread.sleep(100) ensures that
+            // cancellation exceptions propagate immediately.
+            delay(100)
+        }
+
+        // Timeout — process is still alive but never emitted "running inbound"
+        Timber.tag(TAG).w("XRAY_INIT_TIMEOUT: process alive, lastOutput=\n%s",
+            lastOutput.take(1000))
+        return ReadyResult.TIMEOUT
+    }
+
+    // ------------------------------------------------------------------
+    // Stop — MUTEX-FREE to avoid deadlock with a hung start()
+    // ------------------------------------------------------------------
+
+    override suspend fun stop(): Result<Unit> = withContext(Dispatchers.IO) {
+        val current = _state.value
+        if (current == EngineRuntimeState.Idle || current == EngineRuntimeState.Stopping) {
+            Timber.tag(TAG).w("stop() called but engine is already $current — no-op")
+            return@withContext Result.success(Unit)
+        }
+
+        _state.value = EngineRuntimeState.Stopping
+        Timber.tag(TAG).i("[XrayKill] Stopping Xray engine — immediate SIGKILL")
+
+        try {
+            // ════════════════════════════════════════════════════════════
+            // DIRECT HARD KILL — bypasses the mutex to avoid deadlock
+            // ════════════════════════════════════════════════════════════
+            hardKillProcess(process)
+            process = null
+
+            cleanup()
+
+            _state.value = EngineRuntimeState.Idle
+            Timber.tag(TAG).i("[XrayKill] Xray engine stopped successfully")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            _state.value = EngineRuntimeState.Crashed
+            Timber.tag(TAG).e(e, "Error while stopping Xray engine")
+            Result.failure(
+                EngineError(
+                    code = EngineError.ErrorCode.UNKNOWN,
+                    message = "Failed to stop Xray engine: ${e.message}",
+                    cause = e
                 )
-            }
+            )
         }
     }
 
@@ -468,28 +534,50 @@ class XrayEngine @Inject constructor(
     }
 
     /**
-     * Gracefully terminate the xray subprocess.
-     * Sends SIGTERM first, then forcibly kills if it doesn't respond.
+     * HARD KILL — immediate [destroyForcibly] (SIGKILL).
+     *
+     * A frozen native (Go/C) process does NOT respond to SIGTERM ([destroy]).
+     * We go straight to SIGKILL so the process is guaranteed to die and
+     * release the TUN fd / socket locks.
+     *
+     * Safe to call multiple times (idempotent via null-check and isAlive).
      */
-    private fun destroyProcess() {
-        val proc = process ?: return
-        if (!proc.isAlive) return
+    private fun hardKillProcess(procToKill: Process?) {
+        val proc = procToKill ?: return
+        if (!proc.isAlive) {
+            Timber.tag(TAG).d("[XrayKill] Process already dead — no kill needed")
+            return
+        }
 
-        Timber.tag(TAG).d("Destroying Xray process")
-        proc.destroy() // SIGTERM
+        Timber.tag(TAG).w("[XrayKill] Sending SIGKILL to Xray process")
+
+        // Try Linux kill -9 via /proc/pid first (more reliable than Java process.destroyForcibly)
         try {
-            val exited = proc.waitFor(3, TimeUnit.SECONDS)
-            if (!exited) {
-                Timber.tag(TAG).w("Xray process did not terminate gracefully — force killing")
-                proc.destroyForcibly()
-                proc.waitFor(2, TimeUnit.SECONDS)
+            val pidField = proc.javaClass.getDeclaredField("pid")
+            pidField.isAccessible = true
+            val pid = pidField.getInt(proc)
+            if (pid > 0) {
+                Timber.tag(TAG).i("[XrayKill] killing PID %d with kill -9", pid)
+                Runtime.getRuntime().exec(arrayOf("kill", "-9", pid.toString()))
+                    .waitFor(2, TimeUnit.SECONDS)
+            }
+        } catch (_: Exception) {
+            // Fallback to Java's destroyForcibly
+        }
+
+        // Java-level destroyForcibly (SIGKILL via Process.destroyForcibly)
+        proc.destroyForcibly()
+        try {
+            val exited = proc.waitFor(2, TimeUnit.SECONDS)
+            if (exited) {
+                Timber.tag(TAG).i("[XrayKill] Xray process killed and reaped")
+            } else {
+                Timber.tag(TAG).w("[XrayKill] Xray process did NOT die after destroyForcibly")
             }
         } catch (e: InterruptedException) {
-            Timber.tag(TAG).w("Interrupted while waiting for Xray process — force killing")
-            proc.destroyForcibly()
+            Timber.tag(TAG).w("[XrayKill] Interrupted while waiting for process death")
             Thread.currentThread().interrupt()
         }
-        process = null
     }
 
     /** Remove the temporary config file + close inheritable TUN fd + reset. */
@@ -554,5 +642,8 @@ class XrayEngine @Inject constructor(
 
     companion object {
         private const val TAG = "XrayEngine"
+
+        /** How long (ms) to wait for Xray to emit its "running inbound" marker. */
+        private const val INIT_WAIT_MS = 3000L
     }
 }

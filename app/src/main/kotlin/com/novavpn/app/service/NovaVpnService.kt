@@ -14,6 +14,7 @@ import com.novavpn.app.R
 import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.NovaConfig
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.model.TunDiagnostics
 import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.engine.api.EngineContext
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 /**
@@ -408,8 +410,16 @@ class NovaVpnService : VpnService() {
     // ------------------------------------------------------------------
 
     /**
-     * Atomic teardown — closes TUN fd, stops engine, stops bridge,
-     * removes notification and stops the service.
+     * Atomic teardown — closes TUN fd, stops engine (with hard-kill
+     * fallback), stops bridge, removes notification and stops the service.
+     *
+     * ## Hard-kill fallback
+     *
+     * If the engine's [Engine.stop] does not complete within 3 seconds
+     * (indicating the Xray process is frozen or unresponsive), we escalate
+     * to a direct OS‑level SIGKILL via `kill -9 <pid>`.  This mirrors the
+     * pattern used by Karing / LibVpnCore, where the Go library always
+     * uses `os.Process.Kill()` (SIGKILL) for teardown.
      *
      * Safe to call multiple times (idempotent via [engineStarted] /
      * [bridgeStarted] flags and null-checks).
@@ -430,8 +440,17 @@ class NovaVpnService : VpnService() {
         }
 
         if (engineStarted) {
-            Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core...")
-            try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
+            Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core (3s timeout)...")
+            try {
+                withTimeout(3_000L) { engineManager.activeEngine?.stop() }
+                Timber.tag(TAG).i("[VpnLifecycle] Xray Core stopped cleanly")
+            } catch (e: TimeoutCancellationException) {
+                Timber.tag(TAG).e("[VpnLifecycle] Xray engine stop TIMED OUT — forcing hard kill")
+                hardKillXrayProcess()
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "[VpnLifecycle] Engine stop threw: %s", e.message)
+                hardKillXrayProcess()
+            }
             engineStarted = false
         }
 
@@ -439,13 +458,45 @@ class NovaVpnService : VpnService() {
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null
         currentConfig = null
-        com.novavpn.domain.model.TunDiagnostics.reset()
+        TunDiagnostics.reset()
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
         connectUseCase.updateState(VpnState.Disconnected)
         stopSelf()
         Timber.tag(TAG).i("[VpnLifecycle] Teardown complete — service stopped")
+    }
+
+    /**
+     * Last‑resort hard kill of the Xray native process.
+     *
+     * Uses the PID stored by [TunDiagnostics] during engine start and sends
+     * SIGKILL (`kill -9`) directly via the OS.  This is only reached when
+     * [Engine.stop] itself times out or fails — normally the engine's own
+     * [hardKillProcess][com.novavpn.engine.xray.XrayEngine] handles this.
+     *
+     * Mirrors the Karing / LibVpnCore pattern where the Go library always
+     * kills the core child process with an OS‑level SIGKILL on teardown.
+     */
+    private fun hardKillXrayProcess() {
+        val pid = TunDiagnostics.xrayPid
+        if (pid <= 0) {
+            Timber.tag(TAG).w("[VpnLifecycle] Hard-kill SKIPPED — no valid PID (%d)", pid)
+            return
+        }
+        Timber.tag(TAG).w("[VpnLifecycle] Hard-killing Xray PID %d with kill -9", pid)
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("kill", "-9", pid.toString()))
+            val exited = proc.waitFor(2, TimeUnit.SECONDS)
+            if (exited && proc.exitValue() == 0) {
+                Timber.tag(TAG).i("[VpnLifecycle] kill -9 %d succeeded", pid)
+            } else {
+                Timber.tag(TAG).w("[VpnLifecycle] kill -9 %d returned exit=%d",
+                    pid, if (exited) proc.exitValue() else -1)
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "[VpnLifecycle] kill -9 %d failed: %s", pid, e.message)
+        }
     }
 
     /**
@@ -461,8 +512,17 @@ class NovaVpnService : VpnService() {
         connectUseCase.updateState(VpnState.Disconnecting)
         tunHealthJob?.cancel()
         tunHealthJob = null
-        Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core...")
-        try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
+        Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core (3s timeout)...")
+        try {
+            withTimeout(3_000L) { engineManager.activeEngine?.stop() }
+            Timber.tag(TAG).i("[VpnLifecycle] Xray Core stopped cleanly")
+        } catch (e: TimeoutCancellationException) {
+            Timber.tag(TAG).e("[VpnLifecycle] Xray engine stop TIMED OUT — forcing hard kill")
+            hardKillXrayProcess()
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "[VpnLifecycle] Engine stop threw: %s", e.message)
+            hardKillXrayProcess()
+        }
         engineStarted = false
         Timber.tag(TAG).i("[VpnLifecycle] Stopping bridge...")
         try { tunnelBridge.stop() } catch (e: Exception) {
