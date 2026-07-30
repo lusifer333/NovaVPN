@@ -18,6 +18,7 @@ set(HEV_INCLUDES
     "${HEV_SRC}/third-part/lwip/src/include"
     "${HEV_SRC}/third-part/lwip/src/ports/include"
     "${HEV_SRC}/third-part/hev-task-system/include"
+    "${HEV_SRC}/third-part/hev-task-system/src"
     "${HEV_SRC}/include"
 )
 
