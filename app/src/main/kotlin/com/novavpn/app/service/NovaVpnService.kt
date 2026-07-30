@@ -430,7 +430,7 @@ class NovaVpnService : VpnService() {
                     com.novavpn.domain.model.TunDiagnostics.tunReadAttempts,
                     com.novavpn.domain.model.TunDiagnostics.bridgeRunning,
                     com.novavpn.domain.model.TunDiagnostics.bridgePackets,
-                    bridgeDiag.forwardBytes,
+                    bridgeDiag.forwardedBytes,
                     com.novavpn.domain.model.TunDiagnostics.bridgeErrors,
                     rx, tx)
 
