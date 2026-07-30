@@ -377,76 +377,53 @@ class XrayEngine @Inject constructor(
     }
 
     // ------------------------------------------------------------------
-    // Init wait helper — cancellable and marker-based
+    // Init wait helper — polls SOCKS5 port instead of parsing stderr
     // ------------------------------------------------------------------
 
     private enum class ReadyResult { READY, DIED, TIMEOUT, CANCELLED }
 
     /**
-     * Wait up to [INIT_WAIT_MS] for Xray to emit its startup marker
-     * ("Xray ... started" or "listening TCP on").
+     * Wait up to [INIT_WAIT_MS] for Xray's SOCKS5 inbound port to open.
+     *
+     * Instead of trying to parse process stderr (which may be buffered or
+     * consumed differently on Android ARM64), this polls the actual inbound
+     * port (10808) until it accepts a TCP connection.
      *
      * Cancellation-safe: uses [delay] and [ensureActive] instead of
      * `Thread.sleep()`, so a cancelled coroutine exits immediately.
      */
     private suspend fun awaitXrayReady(xrayProcess: Process): ReadyResult {
-        // Android ARM64 can take 5-8 seconds for Xray init (geo file loading, JIT warmup).
-        // 3000ms was too tight — bumped to 8000ms.
-        val initWaitMs = 8000L
+        val initWaitMs = 12000L
+        val socksPort = 10808 // matches XrayConfigParser.buildInbounds()
         val startTime = System.currentTimeMillis()
-        var lastOutput = ""
 
         while (System.currentTimeMillis() - startTime < initWaitMs) {
-            // CANCELLATION CHECKPOINT — this is why we use delay, not Thread.sleep
             currentCoroutineContext().ensureActive()
 
             if (!xrayProcess.isAlive) {
-                // Read remaining output
                 val errorOutput = try {
                     xrayProcess.inputStream.bufferedReader().readText()
                 } catch (_: Exception) { "" }
-                Timber.tag(TAG).e("XRAY_DIED: output=\n%s", errorOutput.take(1000))
+                Timber.tag(TAG).e("XRAY_DIED during init: output=\n%s", errorOutput.take(1000))
                 return ReadyResult.DIED
             }
 
-            // Read any available output (non-blocking)
+            // Try connecting to the SOCKS5 inbound port
             try {
-                val avail = xrayProcess.inputStream.available()
-                if (avail > 0) {
-                    val buf = ByteArray(avail.coerceAtMost(4096))
-                    xrayProcess.inputStream.read(buf, 0, buf.size)
-                    val chunk = String(buf, Charsets.UTF_8)
-                    lastOutput += chunk
+                val sock = java.net.Socket()
+                sock.connect(java.net.InetSocketAddress("127.0.0.1", socksPort), 200)
+                sock.close()
+                Timber.tag(TAG).i("XRAY_READY: SOCKS5 port %d is accepting connections", socksPort)
+                return ReadyResult.READY
+            } catch (_: Exception) {
+                // Port not ready yet — keep waiting
+            }
 
-                    // Check for fatal errors
-                    if (chunk.contains("permission denied", ignoreCase = true) ||
-                        chunk.contains("failed to start", ignoreCase = true)) {
-                        Timber.tag(TAG).w("XRAY_ERROR_DURING_INIT: %s", chunk.take(500))
-                    }
-
-                    // SUCCESS MARKER — Xray v26+ confirms it's running
-                    // In v26 the markers changed from "running inbound" to
-                    // "Xray ... started" / "listening TCP on ..."
-                    if ((chunk.contains("started", ignoreCase = true) && chunk.contains("Xray", ignoreCase = true)) ||
-                        chunk.contains("listening TCP", ignoreCase = true)) {
-                        Timber.tag(TAG).i("XRAY_READY: %s", chunk.take(200))
-                        if (lastOutput.isNotBlank()) {
-                            Timber.tag(TAG).i("XRAY_STDERR_DUMP:\n%s", lastOutput.take(2000))
-                        }
-                        return ReadyResult.READY
-                    }
-                }
-            } catch (_: Exception) { }
-
-            // CANCELLATION SAFE — delay respects coroutine cancellation
-            // Using delay(100) instead of Thread.sleep(100) ensures that
-            // cancellation exceptions propagate immediately.
-            delay(100)
+            delay(200)
         }
 
-        // Timeout — process is still alive but never emitted startup marker
-        Timber.tag(TAG).w("XRAY_INIT_TIMEOUT: process alive, lastOutput=\n%s",
-            lastOutput.take(1000))
+        Timber.tag(TAG).w("XRAY_INIT_TIMEOUT: process alive for %dms but port %d never opened",
+            initWaitMs, socksPort)
         return ReadyResult.TIMEOUT
     }
 
