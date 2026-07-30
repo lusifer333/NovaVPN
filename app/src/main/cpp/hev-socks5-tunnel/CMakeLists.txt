@@ -147,22 +147,32 @@ set(TUNNEL_SOURCES
     "${HEV_SRC}/src/hev-main.c"
     "${HEV_SRC}/src/hev-config.c"
     "${HEV_SRC}/src/hev-socks5-tunnel.c"
-    "${HEV_SRC}/src/hev-tunnel-linux.c"
+    "${HEV_SRC}/src/hev-socks5-session.c"
     "${HEV_SRC}/src/hev-socks5-session-tcp.c"
     "${HEV_SRC}/src/hev-socks5-session-udp.c"
+    "${HEV_SRC}/src/hev-tunnel-linux.c"
     "${HEV_SRC}/src/hev-mapped-dns.c"
+    "${HEV_SRC}/src/core/src/hev-rbtree.c"
     "${HEV_SRC}/src/core/src/hev-socks5-misc.c"
     "${HEV_SRC}/src/core/src/hev-socks5.c"
     "${HEV_SRC}/src/core/src/hev-socks5-tcp.c"
     "${HEV_SRC}/src/core/src/hev-socks5-server.c"
+    "${HEV_SRC}/src/core/src/hev-socks5-client.c"
     "${HEV_SRC}/src/core/src/hev-socks5-client-tcp.c"
     "${HEV_SRC}/src/core/src/hev-socks5-client-udp.c"
+    "${HEV_SRC}/src/core/src/hev-socks5-udp.c"
     "${HEV_SRC}/src/core/src/hev-socks5-authenticator.c"
+    "${HEV_SRC}/src/core/src/hev-socks5-user.c"
     "${HEV_SRC}/src/core/src/hev-socks5-logger.c"
     "${HEV_SRC}/src/misc/hev-exec.c"
+    "${HEV_SRC}/src/misc/hev-list.c"
     "${HEV_SRC}/src/misc/hev-logger.c"
     "${HEV_SRC}/src/misc/hev-ring-buffer.c"
     "${HEV_SRC}/src/misc/hev-utils.c"
+)
+
+set(LWIP_PORT_SOURCES
+    "${HEV_SRC}/third-part/lwip/src/ports/unix/lib/sys_arch.c"
 )
 
 # ============================================================================
@@ -171,6 +181,7 @@ set(TUNNEL_SOURCES
 add_library(hev_socks5_tunnel STATIC
     ${YAML_SOURCES}
     ${LWIP_SOURCES}
+    ${LWIP_PORT_SOURCES}
     ${HEV_TASK_SOURCES}
     ${TUNNEL_SOURCES}
 )
