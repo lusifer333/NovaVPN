@@ -28,6 +28,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -59,7 +60,8 @@ import kotlinx.coroutines.sync.withLock
  */
 @Singleton
 class XrayEngine @Inject constructor(
-    private val binaryManager: BinaryManager
+    private val binaryManager: BinaryManager,
+    @ApplicationContext private val appContext: android.content.Context
 ) : Engine {
 
     override val type: EngineType = EngineType.Xray
@@ -259,7 +261,7 @@ class XrayEngine @Inject constructor(
                 pb.environment()?.put("XRAY_LOCATION_ASSET", ".") // if geo files are local
 
                 // Bind before fork so child inherits network binding
-                val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                         as? android.net.ConnectivityManager
                 val activeNet = cm?.activeNetwork
                 if (activeNet != null) {
