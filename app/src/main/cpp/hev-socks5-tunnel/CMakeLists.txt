@@ -42,6 +42,9 @@ set(HEV_DEFINES
     YAML_VERSION_PATCH=5
     YAML_VERSION_STRING="0.2.5"
 
+    # lwIP port: skip fd_set typedef on NDK 26+ (system <sys/select.h> provides it)
+    FD_SET_DEFINED=1
+
     $<$<CONFIG:Debug>:ENABLE_DEBUG>  # debug logging
 )
 
