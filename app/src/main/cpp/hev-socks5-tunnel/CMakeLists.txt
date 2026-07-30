@@ -190,6 +190,7 @@ target_link_libraries(hev_socks5_tunnel
 
 # Suppress warnings from third-party code
 target_compile_options(hev_socks5_tunnel PRIVATE
+    -std=gnu17
     -Wall -Wno-unused-parameter -Wno-unused-variable -Wno-sign-compare
     -Wno-pointer-sign -Wno-deprecated-declarations
     -Wno-cast-function-type
