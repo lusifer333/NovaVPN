@@ -31,6 +31,10 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+      - name: Install NDK
+        run: |
+          yes | ${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125" 2>&1 | tail -3
+
       - name: Grant execute permission
         run: chmod +x gradlew
 
