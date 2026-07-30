@@ -79,12 +79,8 @@ class NativeTunnelBridge @Inject constructor(
         try {
             ensureBinary()
 
-            // Write YAML config file for the bridge binary
-            val cfgPath = writeBridgeConfig(tunFd, socksHost, socksPort)
-            Timber.tag(TAG).i("BRIDGE_CONFIG: %s", cfgPath)
-
-            // Build args — point binary at the config file
-            val args = arrayOf("--config", cfgPath)
+            // Build args — fd comes as a string argument to the child
+            val args = arrayOf("--fd", tunFd.toString(), "--socks5", "$socksHost:$socksPort")
             Timber.tag(TAG).i("BRIDGE_COMMAND: %s %s", binaryPath, args.joinToString(" "))
 
             // Clear any previous crash log
@@ -127,7 +123,7 @@ class NativeTunnelBridge @Inject constructor(
             } else {
                 // Reap exit status via waitpid
                 val exitCode = reapExitCode(pid)
-                val crashLog = readCrashLog()
+                val crashLog = readCrashLogContents()
                 Timber.tag(TAG).w("BRIDGE_EXITED: pid=%d, exit=%d", pid, exitCode)
                 if (crashLog != null) {
                     Timber.tag(TAG).e("BRIDGE_CRASH_LOG:\n%s", crashLog)
@@ -185,37 +181,15 @@ class NativeTunnelBridge @Inject constructor(
     }
 
     // ------------------------------------------------------------------
-    // Bridge config YAML
-    // ------------------------------------------------------------------
-
-    /**
-     * Write a YAML config file for hev-socks5-tunnel in the app's cache
-     * directory and return its absolute path.
-     */
-    private fun writeBridgeConfig(tunFd: Int, host: String, port: Int): String {
-        val yaml = buildString {
-            appendLine("workers: 1")
-            appendLine("tunnel:")
-            appendLine("  mtu: 1500")
-            appendLine("  fd: $tunFd")
-            appendLine("socks5:")
-            appendLine("  address: \"$host\"")
-            appendLine("  port: $port")
-        }
-        configFile.writeText(yaml)
-        Timber.tag(TAG).d("BRIDGE_CONFIG_WRITTEN: %s (%d bytes)", configFile, yaml.length)
-        return configFile.absolutePath
-    }
-
-    // ------------------------------------------------------------------
     // Crash log
     // ------------------------------------------------------------------
 
     /**
-     * Read the captured stderr/stdout from the bridge binary, or return null
-     * if the file doesn't exist or is empty.
+     * Read the captured stderr/stdout from the bridge binary.
+     * Called by [NovaVpnService] DIAG loop to surface crash output to Logcat.
+     * @return the captured log text, or null if the file doesn't exist or is empty.
      */
-    private fun readCrashLog(): String? {
+    fun readCrashLogContents(): String? {
         return try {
             val content = crashLogFile.readText().trim()
             if (content.isNotEmpty()) content else null

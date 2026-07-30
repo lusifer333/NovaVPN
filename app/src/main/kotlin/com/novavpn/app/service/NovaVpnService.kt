@@ -430,9 +430,17 @@ class NovaVpnService : VpnService() {
                     com.novavpn.domain.model.TunDiagnostics.tunReadAttempts,
                     com.novavpn.domain.model.TunDiagnostics.bridgeRunning,
                     com.novavpn.domain.model.TunDiagnostics.bridgePackets,
-                    com.novavpn.domain.model.TunDiagnostics.bridgeBytes,
+                    bridgeDiag.forwardBytes,
                     com.novavpn.domain.model.TunDiagnostics.bridgeErrors,
                     rx, tx)
+
+                // If the bridge died, dump its captured stderr/stdout to Logcat
+                if (!bridgeDiag.processAlive) {
+                    val crashLog = tunnelBridge.readCrashLogContents()
+                    if (crashLog != null) {
+                        android.util.Log.e("TunnelBridge", "CRASH CAUSE:\n$crashLog")
+                    }
+                }
             }
         }
     }
