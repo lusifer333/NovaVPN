@@ -43,23 +43,22 @@ object XrayConfigParser {
 
     /**
      * Convert a [ServerConfig] into a complete Xray JSON configuration string
-     * with TUN inbound for Android VPN mode.
+     * with SOCKS5 proxy inbound.  TUN fd management is handled exclusively
+     * by NovaVpnService and hev-socks5-tunnel bridge.
      *
      * @param config The parsed server configuration to convert.
-     * @param tunFd The TUN interface file descriptor (from VpnService.Builder.establish()).
-     * @param dnsServers DNS server addresses to use (e.g. ["8.8.8.8", "1.1.1.1"]).
-     * @param routes Routes to forward through the VPN (e.g. ["0.0.0.0/0"]).
+     * @param dnsServers DNS server addresses to use.
+     * @param routes Routes to forward through the VPN.
      * @return A pretty-printed Xray JSON string.
      */
     fun toXrayJson(
         config: ServerConfig,
-        tunFd: Int,
         dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1"),
         routes: List<String> = listOf("0.0.0.0/0")
     ): String {
         val root = buildJsonObject {
             put("log", buildLogSection())
-            put("inbounds", buildInbounds(tunFd))
+            put("inbounds", buildInbounds())
             put("outbounds", buildOutbounds(config))
             put("routing", buildRouting())
             put("dns", buildDns(dnsServers))
@@ -67,18 +66,15 @@ object XrayConfigParser {
         }
         val jsonStr = Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
         Timber.tag(TAG).d("Generated Xray config:\n%s", jsonStr)
-        // Log the inbound type and fd for diagnostic
+        // Log inbound info for diagnostic
         val inbounds = root["inbounds"]?.jsonArray
-        val tunInbound = inbounds?.get(0)?.jsonObject
-        val inboundProto = tunInbound?.get("protocol")?.jsonPrimitive?.content ?: "unknown"
-        val inboundFd = tunInbound?.get("settings")?.jsonObject?.get("fd")?.jsonPrimitive?.content ?: "?"
-        Timber.tag(TAG).i("INBOUND_TYPE=%s, fd=%s, numInbounds=%d",
-            inboundProto, inboundFd, inbounds?.size ?: 0)
+        val firstInbound = inbounds?.get(0)?.jsonObject
+        val inboundProto = firstInbound?.get("protocol")?.jsonPrimitive?.content ?: "unknown"
+        Timber.tag(TAG).i("INBOUND_TYPE=%s, numInbounds=%d",
+            inboundProto, inbounds?.size ?: 0)
         // Store in persistent TUN diagnostics
         com.novavpn.domain.model.TunDiagnostics.inboundType = inboundProto
         com.novavpn.domain.model.TunDiagnostics.numInbounds = inbounds?.size ?: 0
-        // Update: this config uses SOCKS5, not TUN inbound
-        com.novavpn.domain.model.TunDiagnostics.inboundType = "socks"
         return jsonStr
     }
 
@@ -97,16 +93,15 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
-     * TUN inbound (primary) + SOCKS/HTTP inbounds (fallback for testing).
+     * SOCKS5 + HTTP inbounds for local proxy forwarding.
      *
-     * TUN inbound uses the pre-existing TUN fd from VpnService.Builder.establish().
-     * In Xray 1.8.0+, the `tun` protocol accepts a pre-opened fd via the `fd`
-     * setting. The process must inherit this fd (clear FD_CLOEXEC).
+     * Xray acts as a pure SOCKS5 proxy; hev-socks5-tunnel bridges TUN traffic
+     * to the SOCKS5 port.  TUN fd management is NovaVpnService's responsibility.
      *
-     * SOCKS5 and HTTP inbounds are kept for debugging: if TUN doesn't work,
+     * SOCKS5 and HTTP inbounds are kept for debugging: if Xray doesn't work,
      * users can test with a local proxy client at 127.0.0.1:10808/10809.
      */
-    private fun buildInbounds(tunFd: Int): JsonArray = buildJsonArray {
+    private fun buildInbounds(): JsonArray = buildJsonArray {
         // SOCKS5 inbound for VPN traffic forwarding
         add(buildJsonObject {
             put("listen", JsonPrimitive("127.0.0.1"))

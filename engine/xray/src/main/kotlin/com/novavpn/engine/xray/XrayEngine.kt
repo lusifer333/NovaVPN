@@ -22,10 +22,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.yield
 import timber.log.Timber
 import java.io.File
-import java.io.FileDescriptor
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -83,17 +81,11 @@ class XrayEngine @Inject constructor(
     // Internal state
     // ------------------------------------------------------------------
 
-    /** EngineContext from initialize() — stores TUN fd, DNS, routes. */
-    private var engineContext: EngineContext? = null
+    /** DNS servers passed from VpnService (stored at init for config generation). */
+    private var dnsServers: List<String> = emptyList()
 
-    /** Dup'd TUN fd for the child process (FD_CLOEXEC cleared via Os.dup). */
-    private var tunFdForChild: Int = -1
-
-    /** The inheritable (dup'd) TUN fd that Xray child process actually receives. */
-    private var inheritableTunFd: Int = -1
-
-    /** Original TUN fd (before dup), for diagnostic. */
-    private var rawTunFd: Int = -1
+    /** Routes passed from VpnService (stored at init for config generation). */
+    private var routes: List<String> = emptyList()
 
     @Volatile
     private var process: Process? = null
@@ -124,23 +116,15 @@ class XrayEngine @Inject constructor(
 
     override suspend fun initialize(context: EngineContext): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // Store EngineContext for use in start()
-            engineContext = context
-
-            val rawFd = context.tunFileDescriptor
-            if (rawFd < 0) {
-                val msg = "Invalid TUN file descriptor: $rawFd"
-                Timber.tag(TAG).e(msg)
-                return@withContext Result.failure(
-                    EngineError(code = EngineError.ErrorCode.TUN_SETUP_FAILED, message = msg)
-                )
-            }
-            rawTunFd = rawFd
-            tunFdForChild = rawFd
+            // Store DNS servers and routes from VpnService for config generation.
+            // Xray acts as a pure SOCKS5 proxy — the TUN fd is managed exclusively
+            // by NovaVpnService and passed directly to hev-socks5-tunnel bridge.
+            dnsServers = context.dnsServers
+            routes = context.routes
 
             Timber.tag(TAG).i(
-                "Initialized: tunFd=%d, dns=%s, routes=%s",
-                rawFd, context.dnsServers, context.routes
+                "Initialized: dns=%s, routes=%s",
+                context.dnsServers, context.routes
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -180,33 +164,15 @@ class XrayEngine @Inject constructor(
                 val version = binaryManager.getEngineVersion(EngineType.Xray)
                 Timber.tag(TAG).i("Xray version: %s", version ?: "unknown")
 
-                // 3. Generate Xray JSON config with TUN inbound
-                val ctx = engineContext
-                    ?: throw EngineError(EngineError.ErrorCode.UNKNOWN, "Engine not initialized — no EngineContext")
-                val rawTunFd = tunFdForChild
-                if (rawTunFd < 0) {
-                    throw EngineError(EngineError.ErrorCode.TUN_SETUP_FAILED, "Invalid TUN fd for child: $rawTunFd")
-                }
-
-                // Dup the TUN fd to create a non-CLOEXEC copy for the child process.
-                inheritableTunFd = createInheritableTunFd(rawTunFd)
-                val dupFailed = inheritableTunFd == rawTunFd
-
-                // Store TUN diagnostic state outside log buffer
-                com.novavpn.domain.model.TunDiagnostics.rawFd = rawTunFd
-                com.novavpn.domain.model.TunDiagnostics.inheritableFd = inheritableTunFd
-                com.novavpn.domain.model.TunDiagnostics.dupOK = !dupFailed
-
-                Timber.tag(TAG).i("TUN_FD_PASS: rawFd=%d, inheritableFd=%d, dupOK=%s",
-                    rawTunFd, inheritableTunFd, !dupFailed)
-
-                Timber.tag(TAG).i("Generating config with TUN fd=%d, dns=%s",
-                    inheritableTunFd, ctx.dnsServers)
+                // 3. Generate Xray JSON config (SOCKS5 proxy only — no TUN inbound)
+                // Xray acts purely as a SOCKS5 proxy; hev-socks5-tunnel bridges
+                // TUN traffic to the SOCKS5 port.  TUN fd management is exclusively
+                // handled by NovaVpnService.
+                Timber.tag(TAG).i("Generating config with dns=%s", dnsServers)
                 val jsonConfig = XrayConfigParser.toXrayJson(
                     config = config,
-                    tunFd = inheritableTunFd,
-                    dnsServers = ctx.dnsServers,
-                    routes = ctx.routes
+                    dnsServers = dnsServers,
+                    routes = routes
                 )
 
                 // 3. Write to engine directory
@@ -284,13 +250,6 @@ class XrayEngine @Inject constructor(
                 com.novavpn.domain.model.TunDiagnostics.processArgs =
                     "$binaryPath run -c ${tempFile.absolutePath}"
 
-                // Verify inheritable fd is valid before spawning child
-                val fdPath = "/proc/self/fd/$inheritableTunFd"
-                val fdType = try {
-                    java.io.File(fdPath).exists()
-                } catch (_: Exception) { false }
-                Timber.tag(TAG).i("PROCFS_CHECK: fd=%d exists=%s", inheritableTunFd, fdType)
-
                 val xrayProcess = pb.start()
                 process = xrayProcess
 
@@ -316,9 +275,7 @@ class XrayEngine @Inject constructor(
                         TunDiagnostics.storePid(pidVal)
                     } catch (_: Exception) { }
 
-                    Timber.tag(TAG).i("XRAY_READY: rawFd=%d, inheritFd=%d, dupOK=%s",
-                        rawTunFd, inheritableTunFd,
-                        rawTunFd != inheritableTunFd)
+                    Timber.tag(TAG).i("XRAY_READY: SOCKS5 proxy started successfully")
                     Result.success(Unit)
                 } else {
                     // ❌ Xray died, timed out, or cancelled — kill and fail
@@ -567,7 +524,7 @@ class XrayEngine @Inject constructor(
         }
     }
 
-    /** Remove the temporary config file + close inheritable TUN fd + reset. */
+    /** Remove the temporary config file and reset state. */
     private fun cleanup() {
         configFile?.let {
             if (it.exists()) {
@@ -576,56 +533,6 @@ class XrayEngine @Inject constructor(
             }
         }
         configFile = null
-
-        // Close the inheritable (dup'd) TUN fd — but NOT the original which
-        // is owned by NovaVpnService (tunInterface).
-        // Only close the dup'd fd if it's actually different from the original.
-        if (inheritableTunFd >= 0 && inheritableTunFd != tunFdForChild) {
-            try {
-                closeFd(inheritableTunFd)
-                Timber.tag(TAG).d("Closed inheritable TUN fd: %d", inheritableTunFd)
-            } catch (e: Exception) {
-                Timber.tag(TAG).w("Failed to close inheritable TUN fd: %s", e.message)
-            }
-            inheritableTunFd = -1
-        }
-
-        engineContext = null
-        tunFdForChild = -1
-    }
-
-    /**
-     * Create a non-CLOEXEC copy of the TUN fd so the child (Xray) process
-     * can inherit it after fork() + exec().
-     *
-     * On Android 12+, ParcelFileDescriptor from VpnService.Builder.establish()
-     * has the FD_CLOEXEC flag set. Java's ProcessBuilder closes all CLOEXEC fds
-     * in the child before exec(), making the original TUN fd inaccessible to Xray.
-     *
-     * Os.dup() on Android (libcore) creates a new fd WITHOUT FD_CLOEXEC (POSIX
-     * guarantee). We use reflection to wrap the int fd in a FileDescriptor.
-     */
-    private fun createInheritableTunFd(rawFd: Int): Int {
-        return try {
-            val fd = FileDescriptor()
-            val field = FileDescriptor::class.java.getDeclaredField("descriptor")
-            field.isAccessible = true
-            field.setInt(fd, rawFd)
-            val duped = android.system.Os.dup(fd)
-            field.getInt(duped)
-        } catch (e: Exception) {
-            Timber.tag(TAG).w("Os.dup failed, using raw fd: %s", e.message)
-            rawFd
-        }
-    }
-
-    /** Close a file descriptor by int value using reflection + Os.close. */
-    private fun closeFd(fdInt: Int) {
-        val fd = FileDescriptor()
-        val field = FileDescriptor::class.java.getDeclaredField("descriptor")
-        field.isAccessible = true
-        field.setInt(fd, fdInt)
-        android.system.Os.close(fd)
     }
 
     companion object {
