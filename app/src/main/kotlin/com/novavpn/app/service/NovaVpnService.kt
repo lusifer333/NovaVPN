@@ -68,6 +68,9 @@ class NovaVpnService : VpnService() {
     /** Guards the entire connect / disconnect flow — one at a time. */
     private val connectMutex = Mutex()
 
+    /** Connection timeout — if the entire connect() exceeds this, teardown triggers. */
+    private val connectionTimeoutMs = 15_000L
+
     /** Tracks whether engine / bridge have been started (for precise teardown). */
     private var engineStarted = false
     private var bridgeStarted = false
@@ -106,6 +109,7 @@ class NovaVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        Timber.tag(TAG).i("[VpnLifecycle] onRevoke() — OS revoked the VPN connection")
         connectUseCase.updateState(VpnState.Error("VPN revoked"))
         serviceScope.launch { stopVpnInternal() }
     }
@@ -133,13 +137,14 @@ class NovaVpnService : VpnService() {
      * no connection job is running.
      */
     fun stopVpn() {
-        Timber.tag(TAG).i("DISCONNECT_START")
+        Timber.tag(TAG).i("[VpnLifecycle] Cancel requested by user")
         connectionJob?.cancel()
         connectionJob = null
         // Fallback teardown — runs after the cancelled job releases the mutex
         serviceScope.launch {
             connectMutex.withLock {
                 if (connectUseCase.connectionState.value != VpnState.Disconnected) {
+                    Timber.tag(TAG).i("[VpnLifecycle] Fallback teardown — no connection job was active")
                     stopVpnInternal()
                 }
             }
@@ -173,21 +178,33 @@ class NovaVpnService : VpnService() {
             connectMutex.withLock {
                 try {
                     ensureActive()
-                    connect(config)
-                } catch (e: CancellationException) {
-                    Timber.tag(TAG).w("CONNECT_CANCELLED: %s", e.message)
-                    connectUseCase.updateState(VpnState.Error("Connection cancelled"))
-                    updateNotification("Cancelled")
-                    throw e // re-throw so the coroutine framework handles it
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "CONNECT_FAILED: %s", e.message)
-                    connectUseCase.updateState(VpnState.Error(e.message ?: "VPN failed"))
-                    updateNotification("Connection failed")
-                } finally {
-                    if (!isActive) {
-                        Timber.tag(TAG).i("CONNECT_TEARDOWN: job cancelled — performing atomic teardown")
+                    // Wrap the entire connection flow in a timeout
+                    withTimeout(connectionTimeoutMs) {
+                        connect(config)
+                    }
+                    // ── Post-connect check ──
+                    // If connect() returned without setting Connected (e.g., a 'return'
+                    // inside connect() for engine/bridge failure), teardown immediately.
+                    val afterConnect = connectUseCase.connectionState.value
+                    if (afterConnect != VpnState.Connected) {
+                        Timber.tag(TAG).w("[VpnLifecycle] connect() returned non-Connected (%s) — teardown",
+                            afterConnect)
                         atomicTeardown()
                     }
+                } catch (e: TimeoutCancellationException) {
+                    Timber.tag(TAG).e("[VpnLifecycle] CONNECTION_TIMEOUT — exceeded %d ms", connectionTimeoutMs)
+                    connectUseCase.updateState(VpnState.Error("Connection timed out after ${connectionTimeoutMs}ms"))
+                    updateNotification("Timed out")
+                    atomicTeardown()
+                } catch (e: CancellationException) {
+                    Timber.tag(TAG).w("[VpnLifecycle] CONNECT_CANCELLED: %s", e.message)
+                    connectUseCase.updateState(VpnState.Error("Connection cancelled"))
+                    updateNotification("Cancelled")
+                    throw e
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "[VpnLifecycle] CONNECT_FAILED: %s", e.message)
+                    connectUseCase.updateState(VpnState.Error(e.message ?: "VPN failed"))
+                    updateNotification("Connection failed")
                 }
             }
         }
@@ -267,12 +284,14 @@ class NovaVpnService : VpnService() {
             }
         } catch (_: TimeoutCancellationException) {
             engine.stop(); engineStarted = false
-            Timber.tag(TAG).e("LIFECYCLE: TIMEOUT → engine not running after 30s")
-            connectUseCase.updateState(VpnState.Error("Engine start timed out")); return
+            Timber.tag(TAG).e("[VpnLifecycle] TIMEOUT → engine not running after 30s")
+            connectUseCase.updateState(VpnState.Error("Engine start timed out"))
+            updateNotification("Engine timed out"); return
         }
         if (running == EngineRuntimeState.Crashed) {
-            Timber.tag(TAG).e("LIFECYCLE: ENGINE_CRASHED")
-            connectUseCase.updateState(VpnState.Error("Engine crashed during startup")); return
+            Timber.tag(TAG).e("[VpnLifecycle] ENGINE_CRASHED → during startup")
+            connectUseCase.updateState(VpnState.Error("Engine crashed during startup"))
+            updateNotification("Engine crashed"); return
         }
 
         // ── CHECK CANCELLATION before bridge start ──
@@ -306,19 +325,19 @@ class NovaVpnService : VpnService() {
         startTunHealthMonitor(engine)
 
         // ── Block until engine crashes or coroutine is cancelled ──
-        try {
-            engine.state.collect { state ->
-                if (state == EngineRuntimeState.Crashed
-                    && connectUseCase.connectionState.value == VpnState.Connected) {
-                    connectUseCase.updateState(VpnState.Error("Engine crashed — reconnecting"))
-                    updateNotification("Reconnecting…")
-                    engine.restart(cfg).onSuccess {
-                        connectUseCase.updateState(VpnState.Connected)
-                        updateNotification("Connected")
-                    }
+        // No try-catch here: CancellationException propagates naturally
+        // up to startVpnInternal() which handles it with proper teardown.
+        engine.state.collect { state ->
+            if (state == EngineRuntimeState.Crashed
+                && connectUseCase.connectionState.value == VpnState.Connected) {
+                connectUseCase.updateState(VpnState.Error("Engine crashed — reconnecting"))
+                updateNotification("Reconnecting…")
+                engine.restart(cfg).onSuccess {
+                    connectUseCase.updateState(VpnState.Connected)
+                    updateNotification("Connected")
                 }
             }
-        } catch (_: CancellationException) { }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -365,7 +384,8 @@ class NovaVpnService : VpnService() {
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
                     "rawFd=%d, inheritFd=%d, dupOK=%s, inbound=%s, nInbound=%d, " +
-                    "socks5=%s, tunReads=%d, bridge=%s, bPkts=%d, bBytes=%d, bErr=%d",
+                    "socks5=%s, tunReads=%d, bridge=%s, bPkts=%d, bBytes=%d, bErr=%d, " +
+                    "rxBytes=%d, txBytes=%d",
                     counter, fd, tunFdValid, engineState,
                     com.novavpn.domain.model.TunDiagnostics.rawFd,
                     com.novavpn.domain.model.TunDiagnostics.inheritableFd,
@@ -377,7 +397,8 @@ class NovaVpnService : VpnService() {
                     com.novavpn.domain.model.TunDiagnostics.bridgeRunning,
                     com.novavpn.domain.model.TunDiagnostics.bridgePackets,
                     com.novavpn.domain.model.TunDiagnostics.bridgeBytes,
-                    com.novavpn.domain.model.TunDiagnostics.bridgeErrors)
+                    com.novavpn.domain.model.TunDiagnostics.bridgeErrors,
+                    rx, tx)
             }
         }
     }
@@ -394,36 +415,37 @@ class NovaVpnService : VpnService() {
      * [bridgeStarted] flags and null-checks).
      */
     private suspend fun atomicTeardown() {
-        Timber.tag(TAG).i("ATOMIC_TEARDOWN: engine=%s, bridge=%s",
+        Timber.tag(TAG).i("[VpnLifecycle] Atomic teardown: engineStarted=%s, bridgeStarted=%s",
             engineStarted, bridgeStarted)
 
         tunHealthJob?.cancel()
         tunHealthJob = null
 
         if (bridgeStarted) {
-            Timber.tag(TAG).i("TEARDOWN: BRIDGE_STOP")
+            Timber.tag(TAG).i("[VpnLifecycle] Stopping bridge...")
             try { tunnelBridge.stop() } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "TEARDOWN: BRIDGE_STOP_EXCEPTION: %s", e.message)
+                Timber.tag(TAG).e(e, "[VpnLifecycle] Bridge stop exception: %s", e.message)
             }
             bridgeStarted = false
         }
 
         if (engineStarted) {
-            Timber.tag(TAG).i("TEARDOWN: ENGINE_STOP")
+            Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core...")
             try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
             engineStarted = false
         }
 
-        Timber.tag(TAG).i("TEARDOWN: TUN_CLOSE")
+        Timber.tag(TAG).i("[VpnLifecycle] Closing tunFd...")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null
         currentConfig = null
         com.novavpn.domain.model.TunDiagnostics.reset()
 
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Timber.tag(TAG).i("TEARDOWN: COMPLETE → state=Disconnected")
+        Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
         connectUseCase.updateState(VpnState.Disconnected)
         stopSelf()
+        Timber.tag(TAG).i("[VpnLifecycle] Teardown complete — service stopped")
     }
 
     /**
@@ -432,29 +454,30 @@ class NovaVpnService : VpnService() {
      */
     private suspend fun stopVpnInternal() {
         if (connectUseCase.connectionState.value == VpnState.Disconnected) {
-            Timber.tag(TAG).d("LIFECYCLE: DISCONNECT_SKIP — already disconnected")
+            Timber.tag(TAG).d("[VpnLifecycle] DISCONNECT_SKIP — already disconnected")
             return
         }
-        Timber.tag(TAG).i("LIFECYCLE: DISCONNECTING")
+        Timber.tag(TAG).i("[VpnLifecycle] Disconnecting...")
         connectUseCase.updateState(VpnState.Disconnecting)
         tunHealthJob?.cancel()
         tunHealthJob = null
-        Timber.tag(TAG).i("LIFECYCLE: ENGINE_STOP")
+        Timber.tag(TAG).i("[VpnLifecycle] Stopping Xray Core...")
         try { engineManager.activeEngine?.stop() } catch (_: Exception) { }
         engineStarted = false
-        Timber.tag(TAG).i("LIFECYCLE: BRIDGE_STOP")
+        Timber.tag(TAG).i("[VpnLifecycle] Stopping bridge...")
         try { tunnelBridge.stop() } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "BRIDGE_STOP_EXCEPTION: %s", e.message)
+            Timber.tag(TAG).e(e, "[VpnLifecycle] Bridge stop exception: %s", e.message)
         }
         bridgeStarted = false
-        Timber.tag(TAG).i("LIFECYCLE: TUN_CLOSE")
+        Timber.tag(TAG).i("[VpnLifecycle] Closing tunFd...")
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null; currentConfig = null
         com.novavpn.domain.model.TunDiagnostics.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Timber.tag(TAG).i("LIFECYCLE: DISCONNECT_COMPLETE → state=Disconnected")
+        Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
         connectUseCase.updateState(VpnState.Disconnected)
         stopSelf()
+        Timber.tag(TAG).i("[VpnLifecycle] Teardown complete — service stopped")
     }
 
     // ------------------------------------------------------------------
@@ -467,15 +490,20 @@ class NovaVpnService : VpnService() {
             addAddress("10.0.0.2", 32)
             addDnsServer("8.8.8.8"); addDnsServer("1.1.1.1")
             addRoute("0.0.0.0", 0); setBlocking(true)
+            // Explicitly NOT intercepting IPv6 — pass-through only
         }.establish().also { tun ->
             if (tun != null) {
                 val fd = tun.fd
                 val fdValid = fd >= 0
                 val fileDesc = tun.fileDescriptor
-                Timber.tag(TAG).i("TUN BUILT: fd=%d, fdValid=%s, fileDesc=%s, mtu=1500, " +
-                    "addr=10.0.0.2/32, dns=[8.8.8.8,1.1.1.1], routes=[0.0.0.0/0], " +
+                Timber.tag(TAG).i("TUN BUILT: fd=%d, fdValid=%s, fileDesc=%s, " +
+                    "mtu=1500, addr=10.0.0.2/32, " +
+                    "dns=[8.8.8.8,1.1.1.1], " +
+                    "routes=[0.0.0.0/0 (IPv4 only)], " +
+                    "ipv6=pass-through (no ::/0 route), " +
                     "blocking=true, session=%s",
-                    fd, fdValid, if (fileDesc != null) "valid" else "null",
+                    fd, fdValid,
+                    if (fileDesc != null) "valid" else "null",
                     NovaConfig.VPN_SESSION_NAME)
             } else {
                 Timber.tag(TAG).e("TUN establish() returned null!")
