@@ -406,8 +406,7 @@ class NovaVpnService : VpnService() {
                 if (!bridgeAlive) {
                     val crashLog = diag.bridgeExitMessage
                     android.util.Log.e("TunnelBridge",
-                        "BRIDGE_EXIT: pid=%d, code=%d, msg=%s",
-                        diag.bridgePid, diag.bridgeExitCode, crashLog)
+                        "BRIDGE_EXIT: pid=${diag.bridgePid}, code=${diag.bridgeExitCode}, msg=$crashLog")
                 }
             }
         }
