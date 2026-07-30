@@ -143,6 +143,13 @@ Java_com_novavpn_app_service_NativeBridgeRunner_nativeForkExec(
          * CLOEXEC anyway, so this is purely defensive. */
         fcntl(tunFd, F_SETFD, 0);
 
+        /* Set O_NONBLOCK on the TUN fd — hev-socks5-tunnel expects
+         * non-blocking I/O for its epoll-based event loop.  We use
+         * F_GETFL first to preserve any existing flags (O_RDWR, etc.)
+         * rather than raw F_SETFL which would clobber them. */
+        int fl = fcntl(tunFd, F_GETFL, 0);
+        if (fl >= 0) fcntl(tunFd, F_SETFL, fl | O_NONBLOCK);
+
         /* Capture stdout+stderr so bridge crash output is visible */
         redirect_stdio_to_file(logPath);
 
