@@ -28,6 +28,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.annotation.SuppressLint
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.sync.Mutex
@@ -141,6 +142,7 @@ class XrayEngine @Inject constructor(
         }
     }
 
+    @SuppressLint("MissingPermission")
     override suspend fun start(config: ServerConfig): Result<Unit> = withContext(Dispatchers.IO) {
         startMutex.withLock {
             Timber.tag(TAG).i("Starting Xray engine with config '%s' (%s:%d, protocol=%s)",
