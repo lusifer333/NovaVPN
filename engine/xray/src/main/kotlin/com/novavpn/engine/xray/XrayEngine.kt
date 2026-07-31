@@ -171,14 +171,15 @@ class XrayEngine @Inject constructor(
                 // TUN traffic to the SOCKS5 port.  TUN fd management is exclusively
                 // handled by NovaVpnService.
                 Timber.tag(TAG).i("Generating config with dns=%s", dnsServers)
+                val engineDir = binaryManager.getEngineDirectory(EngineType.Xray)
                 val jsonConfig = XrayConfigParser.toXrayJson(
                     config = config,
                     dnsServers = dnsServers,
-                    routes = routes
+                    routes = routes,
+                    logDir = engineDir.absolutePath
                 )
 
                 // 3. Write to engine directory
-                val engineDir = binaryManager.getEngineDirectory(EngineType.Xray)
                 val tempFile = File(engineDir, "config.json")
                 tempFile.writeText(jsonConfig)
                 configFile = tempFile

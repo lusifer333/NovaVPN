@@ -54,10 +54,11 @@ object XrayConfigParser {
     fun toXrayJson(
         config: ServerConfig,
         dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1"),
-        routes: List<String> = listOf("0.0.0.0/0")
+        routes: List<String> = listOf("0.0.0.0/0"),
+        logDir: String? = null
     ): String {
         val root = buildJsonObject {
-            put("log", buildLogSection())
+            put("log", buildLogSection(logDir))
             put("inbounds", buildInbounds())
             put("outbounds", buildOutbounds(config))
             put("routing", buildRouting())
@@ -79,10 +80,18 @@ object XrayConfigParser {
     // Log section
     // ------------------------------------------------------------------
 
-    private fun buildLogSection(): JsonObject = buildJsonObject {
-        put("loglevel", JsonPrimitive("warning"))
-        put("access", JsonPrimitive("/dev/null"))
-        put("error", JsonPrimitive("/dev/null"))
+    private fun buildLogSection(logDir: String? = null): JsonObject = buildJsonObject {
+        if (logDir != null) {
+            // Diagnostic mode: full debug + file logs so the app can mirror
+            // Xray's per-connection/routing/outbound activity into logcat.
+            put("loglevel", JsonPrimitive("debug"))
+            put("access", JsonPrimitive("$logDir/access.log"))
+            put("error", JsonPrimitive("$logDir/error.log"))
+        } else {
+            put("loglevel", JsonPrimitive("warning"))
+            put("access", JsonPrimitive("/dev/null"))
+            put("error", JsonPrimitive("/dev/null"))
+        }
     }
 
     // ------------------------------------------------------------------

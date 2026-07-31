@@ -364,6 +364,8 @@ class NovaVpnService : VpnService() {
 
     @Volatile
     private var lastTunnelLogSize = -1L
+    private var lastXrayErrLogSize = -1L
+    private var lastXrayAccLogSize = -1L
 
     private fun startTunHealthMonitor(engine: com.novavpn.engine.api.Engine) {
         tunHealthJob?.cancel()
@@ -400,26 +402,21 @@ class NovaVpnService : VpnService() {
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
                     "tunName=%s, bridge=%s, bPid=%d, bExit=%d, " +
-                    "rxBytes=%d, txBytes=%d, kernel=%s",
+                    "rxBytes=%d, txBytes=%d, bTxP=%d, bRxP=%d, kernel=%s",
                     counter, fd, tunFdValid, engineState,
                     diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
-                    rx, tx, readTunKernelStats())
+                    rx, tx, diag.tunWrites, diag.tunReads, readTunKernelStats())
 
-                // Mirror the upstream tunnel.log tail into logcat (no adb needed).
-                // Carries [INSTRUMENT] lines + upstream debug logs.
+                // Mirror log tails into logcat (no adb needed): upstream tunnel.log
+                // carries [INSTRUMENT] + library debug lines; Xray access/error logs
+                // (debug level, file-backed) show per-connection routing/outbound state.
                 val tunnelLog = java.io.File(cacheDir, "novavpn/bridge/tunnel.log")
-                if (tunnelLog.exists()) {
-                    val size = tunnelLog.length()
-                    if (size != lastTunnelLogSize) {
-                        lastTunnelLogSize = size
-                        val tail = try {
-                            tunnelLog.readLines().takeLast(15).joinToString(" | ")
-                        } catch (_: Exception) {
-                            "(unreadable)"
-                        }
-                        Timber.tag("TunnelLog").i("tunnel.log (%d B): %s", size, tail)
-                    }
-                }
+                lastTunnelLogSize = mirrorLogTail(tunnelLog, "TunnelLog", lastTunnelLogSize, 15)
+                val xrayLogDir = java.io.File(filesDir, "novavpn/engines/xray")
+                lastXrayErrLogSize = mirrorLogTail(
+                    java.io.File(xrayLogDir, "error.log"), "XrayErr", lastXrayErrLogSize, 12)
+                lastXrayAccLogSize = mirrorLogTail(
+                    java.io.File(xrayLogDir, "access.log"), "XrayAcc", lastXrayAccLogSize, 12)
 
                 // If the bridge died, dump crash log
                 if (!bridgeAlive) {
@@ -468,10 +465,30 @@ class NovaVpnService : VpnService() {
                     return "tun0:rx=${parts[0]}B/${parts[1]}p tx=${parts[8]}B/${parts[9]}p"
                 }
             }
+            return "tun:UNREADABLE:/proc/net/dev: no tun interface line"
         } catch (e: Exception) {
             return "tun:UNREADABLE:${e.javaClass.simpleName}:${e.message}"
         }
-        return "tun:NOT_FOUND"
+    }
+
+    /**
+     * Mirrors the tail of a growing log file into logcat when its size changes.
+     * Used for the upstream tunnel.log and Xray access/error logs so all
+     * diagnostics are visible in-app without adb.
+     *
+     * @return the current file size (caller stores it as last-seen size).
+     */
+    private fun mirrorLogTail(file: java.io.File, tag: String, lastSize: Long, lines: Int): Long {
+        if (!file.exists()) return lastSize
+        val size = try { file.length() } catch (_: Exception) { return lastSize }
+        if (size == lastSize) return lastSize
+        val tail = try {
+            file.readLines().takeLast(lines).joinToString(" | ")
+        } catch (_: Exception) {
+            "(unreadable)"
+        }
+        Timber.tag(tag).i("%s (%d B): %s", file.name, size, tail)
+        return size
     }
 
     // ------------------------------------------------------------------

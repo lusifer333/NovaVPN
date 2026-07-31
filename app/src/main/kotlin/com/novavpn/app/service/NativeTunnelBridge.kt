@@ -71,6 +71,7 @@ class NativeTunnelBridge @Inject constructor(
                 },
                 tunName = "",
                 tunReads = rxPackets,
+                tunWrites = txPackets,
                 socksHost = socksHost,
                 socksPort = socksPort,
                 bridgePath = ""

@@ -26,6 +26,9 @@ data class TunDiagnostics(
     /** Total packets read from TUN since last diagnostics poll. */
     val tunReads: Long = 0L,
 
+    /** Total packets written to TUN (downlink from SOCKS5) since last poll. */
+    val tunWrites: Long = 0L,
+
     /** SOCKS5 proxy address. */
     val socksHost: String = "127.0.0.1",
 
