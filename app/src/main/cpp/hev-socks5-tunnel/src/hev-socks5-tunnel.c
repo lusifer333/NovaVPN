@@ -306,7 +306,10 @@ lwip_io_task_entry (void *data)
 
     LOG_D ("socks5 tunnel lwip task run");
 
-    hev_tunnel_add_task (tun_fd, task_lwip_io);
+    /* [INSTRUMENT] epoll_ctl(EPOLL_CTL_ADD) result — swallowed upstream, fatal if failed */
+    if (hev_tunnel_add_task (tun_fd, task_lwip_io) < 0)
+        LOG_E ("[INSTRUMENT] hev_tunnel_add_task(tun_fd=%d) FAILED: %s",
+               tun_fd, strerror (errno));
 
     for (; run;) {
         struct pbuf *buf;

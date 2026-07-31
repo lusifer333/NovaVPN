@@ -397,10 +397,10 @@ class NovaVpnService : VpnService() {
 
                 Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
                     "tunName=%s, bridge=%s, bPid=%d, bExit=%d, " +
-                    "rxBytes=%d, txBytes=%d",
+                    "rxBytes=%d, txBytes=%d, kernel=%s",
                     counter, fd, tunFdValid, engineState,
                     diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
-                    rx, tx)
+                    rx, tx, readTunKernelStats())
 
                 // If the bridge died, dump crash log
                 if (!bridgeAlive) {
@@ -409,6 +409,37 @@ class NovaVpnService : VpnService() {
                         "BRIDGE_EXIT: pid=${diag.bridgePid}, code=${diag.bridgeExitCode}, msg=$crashLog")
                 }
             }
+        }
+    }
+
+    /**
+     * Kernel-side counters for the TUN interface, read from /proc/net/dev.
+     *
+     * This is the authoritative discriminator between:
+     *  - routing failure: kernel RX stays 0 while browsing  -> packets never reach tun0
+     *  - read failure:    kernel RX increases, bridge stats stay 0 -> library not reading the fd
+     *
+     * /proc/net/dev is world-readable (no root, no adb).
+     */
+    private fun readTunKernelStats(): String {
+        return try {
+            val line = java.io.File("/proc/net/dev").readLines()
+                .firstOrNull { it.contains(":") && it.substringBefore(":").trim().startsWith("tun") }
+            if (line == null) {
+                "tun:NOT_FOUND"
+            } else {
+                val name = line.substringBefore(":").trim()
+                val parts = line.substringAfter(":").trim().split(Regex("\\s+"))
+                // parts: [rxBytes, rxPackets, rxErrs, rxDrop, rxFifo, rxFrame,
+                //         rxCompressed, rxMulticast, txBytes, txPackets, ...]
+                if (parts.size >= 10) {
+                    "$name:rx=${parts[0]}B/${parts[1]}p tx=${parts[8]}B/${parts[9]}p"
+                } else {
+                    "$name:PARSE_SHORT"
+                }
+            }
+        } catch (_: Exception) {
+            "tun:UNREADABLE"
         }
     }
 
