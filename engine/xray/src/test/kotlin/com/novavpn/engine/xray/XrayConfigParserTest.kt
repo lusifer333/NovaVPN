@@ -295,10 +295,73 @@ class XrayConfigParserTest {
     }
 
     // ------------------------------------------------------------------
+    // TLS fragmentation (Patterniha method) regression tests
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `fragmentTls injects fragment-out freedom outbound with tlshello fragment`() {
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""", fragmentTls = true)
+
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        val fragment = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "fragment-out" }.jsonObject
+
+        assertEquals("freedom", fragment["protocol"]!!.jsonPrimitive.content)
+        val fragmentSettings = fragment["settings"]!!.jsonObject["fragment"]!!.jsonObject
+        assertEquals("tlshello", fragmentSettings["packets"]!!.jsonPrimitive.content)
+        // Xray 26 Int32Range format — the classic arrays (lengths/delays) are rejected
+        assertEquals("5-94", fragmentSettings["length"]!!.jsonPrimitive.content)
+        assertEquals("1-1", fragmentSettings["interval"]!!.jsonPrimitive.content)
+        assertEquals("0-0", fragmentSettings["maxSplit"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `fragmentTls routes proxy through dialerProxy and blinds tls fingerprint`() {
+        val root = gen(Protocol.Trojan, """{"id":"x","password":"x"}""", fragmentTls = true)
+
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        val proxy = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "proxy" }.jsonObject
+
+        // dialerProxy inside the existing keepalive sockopt
+        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
+        assertEquals("fragment-out", sockopt["dialerProxy"]!!.jsonPrimitive.content)
+        assertEquals("60", sockopt["tcpKeepAliveIdle"]!!.jsonPrimitive.content)
+
+        // uTLS blind: random fingerprint + explicit cipher suites
+        val tls = proxy["streamSettings"]!!.jsonObject["tlsSettings"]!!.jsonObject
+        assertEquals("random", tls["fingerprint"]!!.jsonPrimitive.content)
+        val suites = tls["cipherSuites"]!!.jsonPrimitive.content
+        assertTrue("has TLS 1.3 suites", suites.contains("TLS_AES_256_GCM_SHA384"))
+        assertTrue("has TLS 1.2 suites", suites.contains("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"))
+        assertTrue("pins kept", tls.containsKey("pinnedPeerCertSha256"))
+    }
+
+    @Test
+    fun `default config has no fragment outbound and no dialerProxy`() {
+        val root = gen(Protocol.Trojan, """{"id":"x","password":"x"}""")
+
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        assertTrue(
+            "no fragment-out by default",
+            outbounds.none { it.jsonObject["tag"]!!.jsonPrimitive.content == "fragment-out" }
+        )
+        val proxy = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "proxy" }.jsonObject
+        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
+        assertNull("no dialerProxy by default", sockopt["dialerProxy"])
+        val tls = proxy["streamSettings"]!!.jsonObject["tlsSettings"]!!.jsonObject
+        assertEquals("chrome", tls["fingerprint"]!!.jsonPrimitive.content)
+        assertNull("no cipherSuites by default", tls["cipherSuites"])
+    }
+
+    // ------------------------------------------------------------------
     // Helper: generate full Xray config and parse it
     // ------------------------------------------------------------------
 
-    private fun gen(proto: Protocol, rawConfig: String, blockQuic: Boolean = false): JsonObject {
+    private fun gen(
+        proto: Protocol,
+        rawConfig: String,
+        blockQuic: Boolean = false,
+        fragmentTls: Boolean = false
+    ): JsonObject {
         val config = ServerConfig(
             name = "Test",
             address = "test.example.com",
@@ -309,7 +372,10 @@ class XrayConfigParserTest {
             rawConfig = rawConfig,
             engineFormat = EngineFormat.XrayJson
         )
-        val jsonStr = XrayConfigParser.toXrayJson(config, dns, routes, blockQuic = blockQuic)
+        val jsonStr = XrayConfigParser.toXrayJson(
+            config, dns, routes,
+            blockQuic = blockQuic, fragmentTls = fragmentTls
+        )
         return parseObj(jsonStr)
     }
 }

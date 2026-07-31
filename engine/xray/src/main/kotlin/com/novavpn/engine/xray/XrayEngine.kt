@@ -104,12 +104,24 @@ class XrayEngine @Inject constructor(
     /** Whether QUIC (HTTP/3) should be sniffed and blocked in generated configs. */
     private var blockQuicEnabled = false
 
+    /** Whether Patterniha-style TLS fragmentation should be applied to the proxy dial. */
+    private var tlsFragmentEnabled = false
+
     /**
      * Enable/disable QUIC blocking. Must be set before [start]; the value is
      * baked into the generated config.json.
      */
     fun setBlockQuic(enabled: Boolean) {
         blockQuicEnabled = enabled
+    }
+
+    /**
+     * Enable/disable TLS fragmentation (fragment-out dialerProxy + random
+     * fingerprint + custom cipher suites). Must be set before [start]; the
+     * value is baked into the generated config.json.
+     */
+    fun setTlsFragment(enabled: Boolean) {
+        tlsFragmentEnabled = enabled
     }
 
     /** Job that reads the engine's stdout/stderr. */
@@ -188,7 +200,8 @@ class XrayEngine @Inject constructor(
                     dnsServers = dnsServers,
                     routes = routes,
                     logDir = engineDir.absolutePath,
-                    blockQuic = blockQuicEnabled
+                    blockQuic = blockQuicEnabled,
+                    fragmentTls = tlsFragmentEnabled
                 )
 
                 // 3. Write to engine directory

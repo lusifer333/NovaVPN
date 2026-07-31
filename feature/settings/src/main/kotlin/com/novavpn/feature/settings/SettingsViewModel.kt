@@ -68,6 +68,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setTlsFragment(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update(_state.value.settings.copy(enableTlsFragment = enabled))
+        }
+    }
+
     fun setPerAppVpn(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.update(_state.value.settings.copy(enablePerAppVpn = enabled))

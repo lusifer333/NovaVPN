@@ -305,7 +305,11 @@ class NovaVpnService : VpnService() {
         // Apply user toggles that shape the generated config (e.g. QUIC block)
         val appSettings = settingsRepository.get()
         (engine as? XrayEngine)?.setBlockQuic(appSettings.enableBlockQuic)
-        Timber.tag(TAG).i("LIFECYCLE: ENGINE_START blockQuic=%b", appSettings.enableBlockQuic)
+        (engine as? XrayEngine)?.setTlsFragment(appSettings.enableTlsFragment)
+        Timber.tag(TAG).i(
+            "LIFECYCLE: ENGINE_START blockQuic=%b fragmentTls=%b",
+            appSettings.enableBlockQuic, appSettings.enableTlsFragment
+        )
         engine.start(cfg).onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
             connectUseCase.updateState(VpnState.Error(error.message ?: "Start failed"))

@@ -51,6 +51,19 @@ object XrayConfigParser {
         "1dfc1605fbad358d8bc844f76d15203fac9ca5c1a79fd4857ffaf2864fbebf96," +
         "76b27b80a58027dc3cf1da68dac17010ed93997d0b603e2fadbe85012493b5a7"
 
+    // Custom TLS cipher suite list applied to the proxy outbound when TLS
+    // fragmentation is enabled: an explicit mixed TLS 1.3/1.2 suite set so
+    // the uTLS "random" fingerprint never advertises a suite list that DPI
+    // fingerprints (Patterniha method, anti-filter).
+    private const val TLS_FRAGMENT_CIPHER_SUITES =
+        "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:" +
+        "TLS_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:" +
+        "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:" +
+        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:" +
+        "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:" +
+        "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:" +
+        "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -68,12 +81,13 @@ object XrayConfigParser {
         dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1"),
         routes: List<String> = listOf("0.0.0.0/0"),
         logDir: String? = null,
-        blockQuic: Boolean = false
+        blockQuic: Boolean = false,
+        fragmentTls: Boolean = false
     ): String {
         val root = buildJsonObject {
             put("log", buildLogSection(logDir))
             put("inbounds", buildInbounds(blockQuic))
-            put("outbounds", buildOutbounds(config))
+            put("outbounds", buildOutbounds(config, fragmentTls))
             put("routing", buildRouting(blockQuic))
             put("dns", buildDns(dnsServers))
             put("policy", buildPolicy())
@@ -173,8 +187,11 @@ object XrayConfigParser {
      * 1. Direct (freedom) outbound — fallback for non-proxied traffic
      * 2. Block outbound — drops traffic that should be blocked
      */
-    private fun buildOutbounds(config: ServerConfig): JsonArray = buildJsonArray {
-        add(buildProxyOutbound(config))
+    private fun buildOutbounds(config: ServerConfig, fragmentTls: Boolean = false): JsonArray = buildJsonArray {
+        if (fragmentTls) {
+            add(buildFragmentOutbound())
+        }
+        add(buildProxyOutbound(config, fragmentTls))
         add(buildDirectOutbound())
         add(buildBlockOutbound())
     }
@@ -183,24 +200,24 @@ object XrayConfigParser {
      * Build the main proxy outbound from the server configuration.
      * Dispatches to protocol-specific builders.
      */
-    private fun buildProxyOutbound(config: ServerConfig): JsonObject = buildJsonObject {
+    private fun buildProxyOutbound(config: ServerConfig, fragmentTls: Boolean = false): JsonObject = buildJsonObject {
         put("tag", JsonPrimitive("proxy"))
 
         when (config.protocol) {
             Protocol.VMess -> {
                 put("protocol", JsonPrimitive("vmess"))
                 put("settings", buildVmessSettings(config))
-                put("streamSettings", buildStreamSettings(config))
+                put("streamSettings", buildStreamSettings(config, fragmentTls))
             }
             Protocol.VLESS -> {
                 put("protocol", JsonPrimitive("vless"))
                 put("settings", buildVlessSettings(config))
-                put("streamSettings", buildStreamSettings(config))
+                put("streamSettings", buildStreamSettings(config, fragmentTls))
             }
             Protocol.Trojan -> {
                 put("protocol", JsonPrimitive("trojan"))
                 put("settings", buildTrojanSettings(config))
-                put("streamSettings", buildStreamSettings(config))
+                put("streamSettings", buildStreamSettings(config, fragmentTls))
             }
             Protocol.Shadowsocks -> {
                 put("protocol", JsonPrimitive("shadowsocks"))
@@ -209,12 +226,12 @@ object XrayConfigParser {
             Protocol.SOCKS5 -> {
                 put("protocol", JsonPrimitive("socks"))
                 put("settings", buildSocksSettings(config))
-                put("streamSettings", buildStreamSettings(config))
+                put("streamSettings", buildStreamSettings(config, fragmentTls))
             }
             Protocol.HTTP -> {
                 put("protocol", JsonPrimitive("http"))
                 put("settings", buildHttpSettings(config))
-                put("streamSettings", buildStreamSettings(config))
+                put("streamSettings", buildStreamSettings(config, fragmentTls))
             }
             Protocol.Unknown -> {
                 put("protocol", JsonPrimitive("freedom"))
@@ -459,7 +476,7 @@ object XrayConfigParser {
      * security fields. Reality is a transport-level security layer (part of
      * streamSettings), while TLS is indicated by setting the security field.
      */
-    private fun buildStreamSettings(config: ServerConfig): JsonObject = buildJsonObject {
+    private fun buildStreamSettings(config: ServerConfig, fragmentTls: Boolean = false): JsonObject = buildJsonObject {
         // Network (transport protocol)
         val network = when (config.transport) {
             Transport.TCP -> "tcp"
@@ -476,7 +493,7 @@ object XrayConfigParser {
         when (config.security) {
             Security.TLS -> {
                 put("security", JsonPrimitive("tls"))
-                put("tlsSettings", buildTlsSettings(config))
+                put("tlsSettings", buildTlsSettings(config, fragmentTls))
             }
             Security.Reality -> {
                 put("security", JsonPrimitive("reality"))
@@ -508,16 +525,29 @@ object XrayConfigParser {
         put("sockopt", buildJsonObject {
             put("tcpKeepAliveIdle", JsonPrimitive(60))
             put("tcpKeepAliveInterval", JsonPrimitive(15))
+            if (fragmentTls) {
+                // Patterniha TLS fragmentation: route the proxy dial through
+                // the fragment-out freedom outbound so the TLS ClientHello is
+                // split into small pieces (5-94 B, ~1 ms apart) that DPI can't
+                // reassemble into a full fingerprintable handshake.
+                put("dialerProxy", JsonPrimitive("fragment-out"))
+            }
         })
     }
 
-    private fun buildTlsSettings(config: ServerConfig): JsonObject {
+    private fun buildTlsSettings(config: ServerConfig, fragmentTls: Boolean = false): JsonObject {
         val raw = parseRawConfig(config.rawConfig)
         val serverName = raw?.get("serverName")?.jsonPrimitive?.content
             ?: raw?.get("sni")?.jsonPrimitive?.content
             ?: raw?.get("host")?.jsonPrimitive?.content
             ?: config.address
-        val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
+        val fingerprint = if (fragmentTls) {
+            // Blind the DPI: randomized uTLS fingerprint so the handshake
+            // never matches a known browser profile byte-for-byte.
+            "random"
+        } else {
+            raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
+        }
         val alpn = raw?.get("alpn")?.jsonPrimitive?.content
         val allowInsecure = raw?.get("allowInsecure")?.jsonPrimitive?.content
         // Worker/panel endpoints are reached by IP while the device's system
@@ -536,6 +566,11 @@ object XrayConfigParser {
         return buildJsonObject {
             put("serverName", JsonPrimitive(serverName))
             put("fingerprint", JsonPrimitive(fingerprint))
+            if (fragmentTls) {
+                // Explicit mixed TLS 1.3/1.2 suite list — never advertise the
+                // server's default suite set (anti-DPI, Patterniha method).
+                put("cipherSuites", JsonPrimitive(TLS_FRAGMENT_CIPHER_SUITES))
+            }
             if (insecure) {
                 put("pinnedPeerCertSha256", JsonPrimitive(PINNED_PEER_CERT_SHA256))
             }
@@ -649,6 +684,34 @@ object XrayConfigParser {
     private fun buildBlockOutbound(): JsonObject = buildJsonObject {
         put("protocol", JsonPrimitive("blackhole"))
         put("tag", JsonPrimitive("block"))
+    }
+
+    /**
+     * Patterniha-style TLS fragmentation outbound (Xray 26 format).
+     *
+     * The classic values ("lengths": ["5","94","1"], "delays": ["0"],
+     * "maxSplit": "0") come from the pre-25.x freedom.fragment schema. Xray
+     * 26 replaced the string arrays with Int32Range fields and RE-COMBINES
+     * the fragments when the interval is 0 (freedom.go: "combine fragmented
+     * tlshello if interval is 0") — so the faithful modern equivalent is:
+     *   length "5-94"   → chunks of 5..94 B (mirrors the old cyclic 5/94/1)
+     *   interval "1-1"  → 1 ms between pieces (non-zero so pieces actually
+     *                     hit the wire as separate TCP segments)
+     *   maxSplit "0-0"  → unlimited splits (like the old "0")
+     * Validated with `xray -test` (Configuration OK) and a live local sink:
+     * a 1706-byte ClientHello arrived in 32 separate TCP writes of 12-97 B.
+     */
+    private fun buildFragmentOutbound(): JsonObject = buildJsonObject {
+        put("tag", JsonPrimitive("fragment-out"))
+        put("protocol", JsonPrimitive("freedom"))
+        put("settings", buildJsonObject {
+            put("fragment", buildJsonObject {
+                put("packets", JsonPrimitive("tlshello"))
+                put("length", JsonPrimitive("5-94"))
+                put("interval", JsonPrimitive("1-1"))
+                put("maxSplit", JsonPrimitive("0-0"))
+            })
+        })
     }
 
     // ------------------------------------------------------------------

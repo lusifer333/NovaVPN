@@ -98,6 +98,13 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.setBlockQuic(it) }
             )
 
+            SettingsSwitchItem(
+                title = "TLS Fragment",
+                subtitle = "Advanced anti-filter: fragment TLS handshake to bypass DPI",
+                checked = settings.enableTlsFragment,
+                onCheckedChange = { viewModel.setTlsFragment(it) }
+            )
+
             Divider(modifier = Modifier.padding(vertical = 4.dp))
 
             // Privacy section
