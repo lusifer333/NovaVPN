@@ -216,7 +216,7 @@ class NativeTunnelBridge @Inject constructor(
             appendLine("  tcp-read-write-timeout: 300000")
             appendLine("  udp-read-write-timeout: 60000")
             appendLine("  log-file: \"${tunnelLogPath()}\"")
-            appendLine("  log-level: \"warn\"")
+            appendLine("  log-level: \"debug\"")
             appendLine("  limit-nofile: 65535")
         })
 

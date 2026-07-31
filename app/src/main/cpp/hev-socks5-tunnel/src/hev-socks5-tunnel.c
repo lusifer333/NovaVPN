@@ -84,6 +84,11 @@ netif_output_handler (struct netif *netif, struct pbuf *p)
     stat_rx_packets++;
     stat_rx_bytes += s;
 
+    /* [INSTRUMENT] first packet written back to the TUN fd (proves packets leave the library) */
+    if (stat_rx_packets == 1)
+        LOG_I ("[INSTRUMENT] first packet written to tun_fd=%d len=%zd (rx_p=1)",
+               tun_fd, s);
+
     return ERR_OK;
 }
 
@@ -312,6 +317,11 @@ lwip_io_task_entry (void *data)
 
         stat_tx_packets++;
         stat_tx_bytes += buf->tot_len;
+
+        /* [INSTRUMENT] first packet read from the TUN fd (proves packets reach the library) */
+        if (stat_tx_packets == 1)
+            LOG_I ("[INSTRUMENT] first packet read from tun_fd=%d len=%d (tx_p=1)",
+                   tun_fd, buf->tot_len);
 
         hev_task_mutex_lock (&mutex);
         if (netif.input (buf, &netif) != ERR_OK)
