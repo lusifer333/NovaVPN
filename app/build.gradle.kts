@@ -27,8 +27,7 @@ android {
         }
 
         ndk {
-            // arm64-v8a (most devices) + armeabi-v7a (32-bit devices)
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += listOf("arm64-v8a")
         }
 
         externalNativeBuild {
