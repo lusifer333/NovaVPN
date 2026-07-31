@@ -27,8 +27,13 @@ android {
         }
 
         ndk {
-            // arm64-v8a (most devices) + armeabi-v7a (32-bit devices)
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // arm64-v8a always. armeabi-v7a is opt-in for one-off 32-bit builds:
+            //   ./gradlew assembleDebug -Parmv7=true
+            val abis = mutableListOf("arm64-v8a")
+            if (project.findProperty("armv7")?.toString()?.toBoolean() == true) {
+                abis += "armeabi-v7a"
+            }
+            abiFilters += abis
         }
 
         externalNativeBuild {

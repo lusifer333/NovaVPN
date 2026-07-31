@@ -52,15 +52,23 @@ jobs:
       - name: Download engine binaries
         run: |
           chmod +x scripts/download-engines.sh
-          scripts/download-engines.sh arm64-v8a armeabi-v7a
+          scripts/download-engines.sh arm64-v8a
+          # Opt-in 32-bit build: name the tag with "armv7" (e.g. v0.16.9-armv7)
+          if [[ "${GITHUB_REF_NAME}" == *armv7* ]]; then
+            echo "ARMV7=true" >> "$GITHUB_ENV"
+            scripts/download-engines.sh armeabi-v7a
+          else
+            echo "ARMV7=false" >> "$GITHUB_ENV"
+          fi
           echo "Engine binaries:"
-          ls -la app/src/main/jniLibs/arm64-v8a/ app/src/main/jniLibs/armeabi-v7a/
+          ls -la app/src/main/jniLibs/arm64-v8a/
 
       - name: Build Release APK
         run: >
           ./gradlew assembleDebug
           -PversionName=${{ steps.version.outputs.version }}
           -PversionCode=${{ steps.version.outputs.code }}
+          -Parmv7=${{ env.ARMV7 }}
           --no-daemon
 
       - name: Rename APK
