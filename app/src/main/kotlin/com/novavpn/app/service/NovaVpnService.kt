@@ -182,21 +182,40 @@ class NovaVpnService : VpnService() {
             connectMutex.withLock {
                 try {
                     ensureActive()
-                    // Wrap the entire connection flow in a timeout
+                    // Establishment watchdog: TUN → engine → bridge must reach
+                    // Connected within connectionTimeoutMs. This must NOT wrap the
+                    // whole session: connect() used to block until disconnect, so the
+                    // timeout killed every healthy connection at exactly 60s regardless
+                    // of traffic (log4: bTxP/bRxP climbing 122→2014 while CONNECTION_TIMEOUT
+                    // fired; engine rxBytes/txBytes are 0 on Android 11+ because
+                    // /proc/net/dev is EACCES-blocked). Session lifetime is governed
+                    // by holdConnection() below — no hard cap.
                     withTimeout(connectionTimeoutMs) {
-                        connect(config)
+                        connectEstablish(config)
                     }
                     // ── Post-connect check ──
-                    // If connect() returned without setting Connected (e.g., a 'return'
-                    // inside connect() for engine/bridge failure), teardown immediately.
+                    // If connectEstablish() returned without setting Connected (e.g., a
+                    // 'return' inside it for engine/bridge failure), teardown immediately.
                     val afterConnect = connectUseCase.connectionState.value
                     if (afterConnect != VpnState.Connected) {
                         Timber.tag(TAG).w("[VpnLifecycle] connect() returned non-Connected (%s) — teardown",
                             afterConnect)
                         atomicTeardown()
                     }
+                    // ── Session phase: no hard timeout ──
+                    // Blocks until the user stops the VPN or the engine crashes.
+                    // Bridge liveness (bTxP/bRxP) is reported by the health monitor.
+                    val engine = engineManager.activeEngine
+                    if (engine == null || config == null) {
+                        Timber.tag(TAG).e("[VpnLifecycle] Missing engine/config after Connected — teardown")
+                        atomicTeardown()
+                    } else {
+                        holdConnection(engine, config)
+                    }
                 } catch (e: TimeoutCancellationException) {
-                    Timber.tag(TAG).e("[VpnLifecycle] CONNECTION_TIMEOUT — exceeded %d ms", connectionTimeoutMs)
+                    val diag = tunnelBridge.diagnostics
+                    Timber.tag(TAG).e("[VpnLifecycle] CONNECTION_TIMEOUT — establishment exceeded %d ms (bridge: bTxP=%d, bRxP=%d)",
+                        connectionTimeoutMs, diag.tunWrites, diag.tunReads)
                     connectUseCase.updateState(VpnState.Error("Connection timed out after ${connectionTimeoutMs}ms"))
                     updateNotification("Timed out")
                     atomicTeardown()
@@ -221,7 +240,7 @@ class NovaVpnService : VpnService() {
      * coroutine never builds a TUN, starts an engine, or spawns a bridge
      * after being told to stop.
      */
-    private suspend fun connect(config: ServerConfig?) {
+    private suspend fun connectEstablish(config: ServerConfig?) {
         Timber.tag(TAG).i("LIFECYCLE: CONNECTING → state=Connecting")
         connectUseCase.updateState(VpnState.Connecting)
         updateNotification("Connecting…")
@@ -338,19 +357,33 @@ class NovaVpnService : VpnService() {
         Timber.tag(TAG).i("LIFECYCLE: ENGINE_RUNNING → state=Connected")
         connectUseCase.updateState(VpnState.Connected)
         updateNotification("Connected")
+    }
 
+    /**
+     * Session phase: block until the engine crashes or the coroutine is
+     * cancelled (user stop).
+     *
+     * There is intentionally NO timeout here. The old flat 60s cap wrapped
+     * [connectEstablish]'s session wait, so it killed every healthy connection
+     * at exactly 60s — engine rxBytes/txBytes stay 0 on Android 11+ because
+     * /proc/net/dev is EACCES-blocked, while the bridge counters (bTxP/bRxP,
+     * from nativeGetTunnelStats) keep climbing. Bridge liveness is reported by
+     * the health monitor instead of being used to kill the session (an idle
+     * VPN is a legitimate state).
+     *
+     * No try-catch here: CancellationException propagates naturally up to
+     * startVpnInternal() which handles it with proper teardown.
+     */
+    private suspend fun holdConnection(engine: com.novavpn.engine.api.Engine, config: ServerConfig) {
         // ── TUN health monitor (runs as long as the connection is alive) ──
         startTunHealthMonitor(engine)
 
-        // ── Block until engine crashes or coroutine is cancelled ──
-        // No try-catch here: CancellationException propagates naturally
-        // up to startVpnInternal() which handles it with proper teardown.
         engine.state.collect { state ->
             if (state == EngineRuntimeState.Crashed
                 && connectUseCase.connectionState.value == VpnState.Connected) {
                 connectUseCase.updateState(VpnState.Error("Engine crashed — reconnecting"))
                 updateNotification("Reconnecting…")
-                engine.restart(cfg).onSuccess {
+                engine.restart(config).onSuccess {
                     connectUseCase.updateState(VpnState.Connected)
                     updateNotification("Connected")
                 }

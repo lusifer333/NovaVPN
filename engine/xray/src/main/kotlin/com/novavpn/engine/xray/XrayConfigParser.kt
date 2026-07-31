@@ -477,6 +477,16 @@ object XrayConfigParser {
             Transport.HTTP -> put("httpSettings", buildHttpTransportSettings(config))
             else -> { /* TCP needs no extra settings */ }
         }
+
+        // TCP keepalive on the underlying connection: prevents middlebox /
+        // Cloudflare idle-drops from silently killing WS sessions (the
+        // recurring "websocket: close 1005 (no status)" churn on dead UDP
+        // associations). Validated against the real Xray 26.3.27 binary
+        // (xray -test -> Configuration OK).
+        put("sockopt", buildJsonObject {
+            put("tcpKeepAliveIdle", JsonPrimitive(60))
+            put("tcpKeepAliveInterval", JsonPrimitive(15))
+        })
     }
 
     private fun buildTlsSettings(config: ServerConfig): JsonObject {

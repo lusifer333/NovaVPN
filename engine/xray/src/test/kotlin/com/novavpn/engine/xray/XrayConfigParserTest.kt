@@ -112,6 +112,26 @@ class XrayConfigParserTest {
             tls["serverName"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun `streamSettings includes TCP keepalive sockopt`() {
+        val config = ServerConfig(
+            name = "KeepAlive",
+            address = "104.17.148.22",
+            port = 443,
+            protocol = Protocol.Trojan,
+            transport = Transport.WebSocket,
+            security = Security.TLS,
+            rawConfig = """{"serverName":"worker.example.com","path":"/ws","host":"worker.example.com"}""",
+            engineFormat = EngineFormat.XrayJson
+        )
+        val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes))
+        val sockopt = proxyOutbound(root)["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
+        // Client-side TCP keepalive: mitigates Cloudflare/middlebox idle drops
+        // that surface as "websocket: close 1005 (no status)".
+        assertEquals(15, sockopt["tcpKeepAliveInterval"]!!.jsonPrimitive.int)
+        assertEquals(60, sockopt["tcpKeepAliveIdle"]!!.jsonPrimitive.int)
+    }
+
     // ------------------------------------------------------------------
     // 4. Shadowsocks config builder
     // ------------------------------------------------------------------
