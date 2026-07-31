@@ -52,9 +52,9 @@ jobs:
       - name: Download engine binaries
         run: |
           chmod +x scripts/download-engines.sh
-          scripts/download-engines.sh arm64-v8a
+          scripts/download-engines.sh arm64-v8a armeabi-v7a
           echo "Engine binaries:"
-          ls -la app/src/main/jniLibs/arm64-v8a/
+          ls -la app/src/main/jniLibs/arm64-v8a/ app/src/main/jniLibs/armeabi-v7a/
 
       - name: Build Release APK
         run: >
