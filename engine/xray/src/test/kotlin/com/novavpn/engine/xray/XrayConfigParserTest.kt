@@ -85,6 +85,33 @@ class XrayConfigParserTest {
         assertEquals("legacy-pass", trojanServer(root)["password"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun `TLS WS outbound pins panel chain and omits removed allowInsecure`() {
+        val config = ServerConfig(
+            name = "Worker",
+            address = "104.17.148.22",
+            port = 443,
+            protocol = Protocol.Trojan,
+            transport = Transport.WebSocket,
+            security = Security.TLS,
+            rawConfig = """{"serverName":"divine-morning-53a7.nahan-1-tarkibi.workers.dev","path":"/divooneop","host":"divine-morning-53a7.nahan-1-tarkibi.workers.dev","fingerprint":"chrome","type":"ws"}""",
+            engineFormat = EngineFormat.XrayJson
+        )
+        val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes))
+        val tls = proxyOutbound(root)["streamSettings"]!!.jsonObject["tlsSettings"]!!.jsonObject
+        // Xray >= 26 rejects allowInsecure (exit 23); pinnedPeerCertSha256 is the replacement.
+        assertFalse("allowInsecure must not be emitted (removed in Xray 26)",
+            tls.containsKey("allowInsecure"))
+        val pin = tls["pinnedPeerCertSha256"]!!.jsonPrimitive.content
+        assertTrue("GTS WE1 intermediate pinned", pin.startsWith(
+            "1dfc1605fbad358d8bc844f76d15203fac9ca5c1a79fd4857ffaf2864fbebf96"))
+        assertTrue("GTS Root R4 pinned", pin.contains(
+            "76b27b80a58027dc3cf1da68dac17010ed93997d0b603e2fadbe85012493b5a7"))
+        assertEquals("serverName preserved",
+            "divine-morning-53a7.nahan-1-tarkibi.workers.dev",
+            tls["serverName"]!!.jsonPrimitive.content)
+    }
+
     // ------------------------------------------------------------------
     // 4. Shadowsocks config builder
     // ------------------------------------------------------------------

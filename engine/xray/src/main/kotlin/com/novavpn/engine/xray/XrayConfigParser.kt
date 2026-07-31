@@ -39,6 +39,18 @@ object XrayConfigParser {
 
     private const val TAG = "XrayConfig"
 
+    // Hex SHA-256 fingerprints of the worker/panel TLS chain
+    // (CN=nahan-1-tarkibi.workers.dev -> GTS WE1 -> GTS Root R4), captured
+    // 2026-07-31 from the live chain (openssl s_client -showcerts).
+    // Xray >= 26 removed "allowInsecure"; pinnedPeerCertSha256 is the
+    // replacement. Pinning the intermediate + root keeps REAL chain
+    // verification (leaf -> pinned CA + serverName check) while bypassing
+    // device trust stores that lack the Google roots. Update if the panel
+    // switches CAs.
+    private const val PINNED_PEER_CERT_SHA256 =
+        "1dfc1605fbad358d8bc844f76d15203fac9ca5c1a79fd4857ffaf2864fbebf96," +
+        "76b27b80a58027dc3cf1da68dac17010ed93997d0b603e2fadbe85012493b5a7"
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -476,19 +488,25 @@ object XrayConfigParser {
         val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
         val alpn = raw?.get("alpn")?.jsonPrimitive?.content
         val allowInsecure = raw?.get("allowInsecure")?.jsonPrimitive?.content
-        // Worker/panel endpoints are reached by IP while the TLS chain (e.g.
-        // Google Trust Services roots) may not resolve in the app's trust
-        // store on all devices/ROMs -> dial fails with
+        // Worker/panel endpoints are reached by IP while the device's system
+        // trust store may not resolve the chain's roots (e.g. Google Trust
+        // Services GTS Root R4 missing on custom ROMs) -> dial fails with
         // "x509: certificate signed by unknown authority" and every request
-        // retries forever (session storm). Skipping cert verification is the
-        // standard config-level fix for such panels; SNI is still sent so the
-        // edge routes correctly. Explicit allowInsecure=0/false opts back in.
+        // retries forever (session storm).
+        // Xray >= 26 REMOVED "allowInsecure" (config rejected, exit 23); the
+        // replacement is "pinnedPeerCertSha256" (comma-separated hex SHA-256
+        // fingerprints). Pinning the panel chain's intermediate + root keeps
+        // real chain verification while bypassing the broken device pool.
+        // Explicit allowInsecure=0/false in the link opts back into plain
+        // system-store verification (no pins emitted).
         val insecure = allowInsecure != "0" && allowInsecure != "false"
 
         return buildJsonObject {
             put("serverName", JsonPrimitive(serverName))
             put("fingerprint", JsonPrimitive(fingerprint))
-            put("allowInsecure", JsonPrimitive(insecure))
+            if (insecure) {
+                put("pinnedPeerCertSha256", JsonPrimitive(PINNED_PEER_CERT_SHA256))
+            }
             if (alpn != null) {
                 val _alpnArr = buildJsonArray {
                     alpn.split(",").forEach { add(JsonPrimitive(it.trim())) }
