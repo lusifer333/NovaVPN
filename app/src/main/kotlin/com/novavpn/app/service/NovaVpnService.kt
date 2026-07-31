@@ -362,6 +362,9 @@ class NovaVpnService : VpnService() {
     // Health monitoring
     // ------------------------------------------------------------------
 
+    @Volatile
+    private var lastTunnelLogSize = -1L
+
     private fun startTunHealthMonitor(engine: com.novavpn.engine.api.Engine) {
         tunHealthJob?.cancel()
         tunHealthJob = serviceScope.launch {
@@ -402,6 +405,22 @@ class NovaVpnService : VpnService() {
                     diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
                     rx, tx, readTunKernelStats())
 
+                // Mirror the upstream tunnel.log tail into logcat (no adb needed).
+                // Carries [INSTRUMENT] lines + upstream debug logs.
+                val tunnelLog = java.io.File(cacheDir, "novavpn/bridge/tunnel.log")
+                if (tunnelLog.exists()) {
+                    val size = tunnelLog.length()
+                    if (size != lastTunnelLogSize) {
+                        lastTunnelLogSize = size
+                        val tail = try {
+                            tunnelLog.readLines().takeLast(15).joinToString(" | ")
+                        } catch (_: Exception) {
+                            "(unreadable)"
+                        }
+                        Timber.tag("TunnelLog").i("tunnel.log (%d B): %s", size, tail)
+                    }
+                }
+
                 // If the bridge died, dump crash log
                 if (!bridgeAlive) {
                     val crashLog = diag.bridgeExitMessage
@@ -413,34 +432,46 @@ class NovaVpnService : VpnService() {
     }
 
     /**
-     * Kernel-side counters for the TUN interface, read from /proc/net/dev.
+     * Kernel-side counters for the TUN interface.
      *
      * This is the authoritative discriminator between:
      *  - routing failure: kernel RX stays 0 while browsing  -> packets never reach tun0
      *  - read failure:    kernel RX increases, bridge stats stay 0 -> library not reading the fd
      *
-     * /proc/net/dev is world-readable (no root, no adb).
+     * Read order: /sys/class/net/<tun>/statistics/* (sysfs, world-readable) then
+     * /proc/net/dev. On failure the exact exception is reported instead of a bare
+     * "UNREADABLE" so we can tell SELinux denial apart from a missing interface.
      */
     private fun readTunKernelStats(): String {
-        return try {
+        val readStat = { f: java.io.File ->
+            try { f.readText().trim() } catch (_: Exception) { "?" }
+        }
+        try {
+            val tun = java.io.File("/sys/class/net").listFiles()
+                ?.firstOrNull { it.name.startsWith("tun") }
+            if (tun != null) {
+                val s = java.io.File(tun, "statistics")
+                return "${tun.name}:rx=${readStat(java.io.File(s, "rx_bytes"))}B/" +
+                    "${readStat(java.io.File(s, "rx_packets"))}p " +
+                    "tx=${readStat(java.io.File(s, "tx_bytes"))}B/" +
+                    "${readStat(java.io.File(s, "tx_packets"))}p"
+            }
+        } catch (e: Exception) {
+            return "tun:UNREADABLE:${e.javaClass.simpleName}:${e.message}"
+        }
+        try {
             val line = java.io.File("/proc/net/dev").readLines()
                 .firstOrNull { it.contains(":") && it.substringBefore(":").trim().startsWith("tun") }
-            if (line == null) {
-                "tun:NOT_FOUND"
-            } else {
-                val name = line.substringBefore(":").trim()
+            if (line != null) {
                 val parts = line.substringAfter(":").trim().split(Regex("\\s+"))
-                // parts: [rxBytes, rxPackets, rxErrs, rxDrop, rxFifo, rxFrame,
-                //         rxCompressed, rxMulticast, txBytes, txPackets, ...]
                 if (parts.size >= 10) {
-                    "$name:rx=${parts[0]}B/${parts[1]}p tx=${parts[8]}B/${parts[9]}p"
-                } else {
-                    "$name:PARSE_SHORT"
+                    return "tun0:rx=${parts[0]}B/${parts[1]}p tx=${parts[8]}B/${parts[9]}p"
                 }
             }
-        } catch (_: Exception) {
-            "tun:UNREADABLE"
+        } catch (e: Exception) {
+            return "tun:UNREADABLE:${e.javaClass.simpleName}:${e.message}"
         }
+        return "tun:NOT_FOUND"
     }
 
     // ------------------------------------------------------------------
