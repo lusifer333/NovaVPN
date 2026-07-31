@@ -101,6 +101,17 @@ class XrayEngine @Inject constructor(
     /** Coroutine scope for background tasks (output collection, process watching). */
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Whether QUIC (HTTP/3) should be sniffed and blocked in generated configs. */
+    private var blockQuicEnabled = false
+
+    /**
+     * Enable/disable QUIC blocking. Must be set before [start]; the value is
+     * baked into the generated config.json.
+     */
+    fun setBlockQuic(enabled: Boolean) {
+        blockQuicEnabled = enabled
+    }
+
     /** Job that reads the engine's stdout/stderr. */
     private var outputCollector: Job? = null
 
@@ -176,7 +187,8 @@ class XrayEngine @Inject constructor(
                     config = config,
                     dnsServers = dnsServers,
                     routes = routes,
-                    logDir = engineDir.absolutePath
+                    logDir = engineDir.absolutePath,
+                    blockQuic = blockQuicEnabled
                 )
 
                 // 3. Write to engine directory

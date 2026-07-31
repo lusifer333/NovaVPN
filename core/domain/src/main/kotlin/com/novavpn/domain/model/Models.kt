@@ -242,6 +242,7 @@ data class AppSettings(
     val selectedEngine: EngineType = EngineType.Xray,
     val customDns: String = "",
     val enableFakeDns: Boolean = false,
+    val enableBlockQuic: Boolean = false,
     val enableIPv6: Boolean = true,
     val enablePerAppVpn: Boolean = false,
     val enableSplitTunnel: Boolean = false,

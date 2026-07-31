@@ -67,13 +67,14 @@ object XrayConfigParser {
         config: ServerConfig,
         dnsServers: List<String> = listOf("8.8.8.8", "1.1.1.1"),
         routes: List<String> = listOf("0.0.0.0/0"),
-        logDir: String? = null
+        logDir: String? = null,
+        blockQuic: Boolean = false
     ): String {
         val root = buildJsonObject {
             put("log", buildLogSection(logDir))
-            put("inbounds", buildInbounds())
+            put("inbounds", buildInbounds(blockQuic))
             put("outbounds", buildOutbounds(config))
-            put("routing", buildRouting())
+            put("routing", buildRouting(blockQuic))
             put("dns", buildDns(dnsServers))
             put("policy", buildPolicy())
         }
@@ -119,7 +120,7 @@ object XrayConfigParser {
      * SOCKS5 and HTTP inbounds are kept for debugging: if Xray doesn't work,
      * users can test with a local proxy client at 127.0.0.1:10808/10809.
      */
-    private fun buildInbounds(): JsonArray = buildJsonArray {
+    private fun buildInbounds(blockQuic: Boolean = false): JsonArray = buildJsonArray {
         // SOCKS5 inbound for VPN traffic forwarding
         add(buildJsonObject {
             put("listen", JsonPrimitive("127.0.0.1"))
@@ -130,6 +131,11 @@ object XrayConfigParser {
                 put("udp", JsonPrimitive(true))
             })
             put("tag", JsonPrimitive("socks-in"))
+            if (blockQuic) {
+                // Detect QUIC (UDP 443) so the routing rule can drop it:
+                // browsers then fall back to TCP and dodge DPI tampering.
+                put("sniffing", buildSniffing())
+            }
         })
         // HTTP proxy fallback
         add(buildJsonObject {
@@ -138,6 +144,22 @@ object XrayConfigParser {
             put("protocol", JsonPrimitive("http"))
             put("settings", buildJsonObject { })
             put("tag", JsonPrimitive("http-in"))
+            if (blockQuic) {
+                put("sniffing", buildSniffing())
+            }
+        })
+    }
+
+    /**
+     * Sniffing config: http + tls for normal traffic, quic for detecting
+     * HTTP/3 handshakes. Only enabled when the "Block QUIC" toggle is on.
+     */
+    private fun buildSniffing(): JsonObject = buildJsonObject {
+        put("enabled", JsonPrimitive(true))
+        put("destOverride", buildJsonArray {
+            add(JsonPrimitive("http"))
+            add(JsonPrimitive("tls"))
+            add(JsonPrimitive("quic"))
         })
     }
 
@@ -639,9 +661,21 @@ object XrayConfigParser {
      * DNS traffic on port 53 is explicitly routed to proxy to prevent
      * DNS_PROBE_POSSIBLE errors.
      */
-    private fun buildRouting(): JsonObject = buildJsonObject {
+    private fun buildRouting(blockQuic: Boolean = false): JsonObject = buildJsonObject {
         put("domainStrategy", JsonPrimitive("AsIs"))
         put("rules", buildJsonArray {
+            if (blockQuic) {
+                // MUST be first: Xray matches rules top-down, and the
+                // catch-all inbound rule below would otherwise grab QUIC
+                // before it reaches this one.
+                add(buildJsonObject {
+                    put("type", JsonPrimitive("field"))
+                    put("protocol", buildJsonArray {
+                        add(JsonPrimitive("quic"))
+                    })
+                    put("outboundTag", JsonPrimitive("block"))
+                })
+            }
             // Route DNS traffic through proxy
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))

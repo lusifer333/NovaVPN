@@ -19,6 +19,7 @@ import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineManager
+import com.novavpn.engine.xray.XrayEngine
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -59,6 +60,7 @@ class NovaVpnService : VpnService() {
     @Inject lateinit var engineManager: EngineManager
     @Inject lateinit var connectUseCase: ConnectUseCase
     @Inject lateinit var serverRepository: com.novavpn.domain.repository.ServerRepository
+    @Inject lateinit var settingsRepository: com.novavpn.domain.repository.SettingsRepository
     @Inject lateinit var tunnelBridge: NativeTunnelBridge
 
     private var currentConfig: ServerConfig? = null
@@ -300,7 +302,10 @@ class NovaVpnService : VpnService() {
 
         // ── CHECK CANCELLATION before engine start ──
         currentCoroutineContext().ensureActive()
-        Timber.tag(TAG).i("LIFECYCLE: ENGINE_START")
+        // Apply user toggles that shape the generated config (e.g. QUIC block)
+        val appSettings = settingsRepository.get()
+        (engine as? XrayEngine)?.setBlockQuic(appSettings.enableBlockQuic)
+        Timber.tag(TAG).i("LIFECYCLE: ENGINE_START blockQuic=%b", appSettings.enableBlockQuic)
         engine.start(cfg).onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
             connectUseCase.updateState(VpnState.Error(error.message ?: "Start failed"))

@@ -255,10 +255,50 @@ class XrayConfigParserTest {
     }
 
     // ------------------------------------------------------------------
+    // QUIC block (Smart Routing) regression tests
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `blockQuic injects sniffing with quic destOverride and a block rule first`() {
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""", blockQuic = true)
+
+        // Inbound sniffing on both inbounds
+        val inbounds = root["inbounds"]!!.jsonArray!!
+        inbounds.forEach { inbound ->
+            val sniffing = inbound.jsonObject["sniffing"]!!.jsonObject
+            assertTrue("sniffing enabled", sniffing["enabled"]!!.jsonPrimitive.content == "true")
+            val destOverride = sniffing["destOverride"]!!.jsonArray!!.map { it.jsonPrimitive.content }
+            assertTrue("quic sniffing", destOverride.contains("quic"))
+            assertTrue("tls sniffing", destOverride.contains("tls"))
+            assertTrue("http sniffing", destOverride.contains("http"))
+        }
+
+        // Routing: QUIC -> block must be the FIRST rule
+        val rules = root["routing"]!!.jsonObject["rules"]!!.jsonArray!!
+        val first = rules[0]!!.jsonObject
+        val protocols = first["protocol"]!!.jsonArray!!.map { it.jsonPrimitive.content }
+        assertEquals(listOf("quic"), protocols)
+        assertEquals("block", first["outboundTag"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `default config has no sniffing and no quic rule`() {
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""")
+        val inbounds = root["inbounds"]!!.jsonArray!!
+        inbounds.forEach { inbound ->
+            assertNull("no sniffing by default", inbound.jsonObject["sniffing"])
+        }
+        val rules = root["routing"]!!.jsonObject["rules"]!!.jsonArray!!
+        rules.forEach { rule ->
+            assertNull("no quic protocol rule", rule.jsonObject["protocol"])
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Helper: generate full Xray config and parse it
     // ------------------------------------------------------------------
 
-    private fun gen(proto: Protocol, rawConfig: String): JsonObject {
+    private fun gen(proto: Protocol, rawConfig: String, blockQuic: Boolean = false): JsonObject {
         val config = ServerConfig(
             name = "Test",
             address = "test.example.com",
@@ -269,7 +309,7 @@ class XrayConfigParserTest {
             rawConfig = rawConfig,
             engineFormat = EngineFormat.XrayJson
         )
-        val jsonStr = XrayConfigParser.toXrayJson(config, dns, routes)
+        val jsonStr = XrayConfigParser.toXrayJson(config, dns, routes, blockQuic = blockQuic)
         return parseObj(jsonStr)
     }
 }

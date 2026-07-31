@@ -91,6 +91,13 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.setFakeDns(it) }
             )
 
+            SettingsSwitchItem(
+                title = "Block QUIC",
+                subtitle = "Fix browser SSL errors by forcing TCP fallback",
+                checked = settings.enableBlockQuic,
+                onCheckedChange = { viewModel.setBlockQuic(it) }
+            )
+
             Divider(modifier = Modifier.padding(vertical = 4.dp))
 
             // Privacy section

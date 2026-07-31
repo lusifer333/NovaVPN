@@ -62,6 +62,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setBlockQuic(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update(_state.value.settings.copy(enableBlockQuic = enabled))
+        }
+    }
+
     fun setPerAppVpn(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.update(_state.value.settings.copy(enablePerAppVpn = enabled))
