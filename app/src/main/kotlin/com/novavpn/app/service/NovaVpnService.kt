@@ -438,7 +438,7 @@ class NovaVpnService : VpnService() {
      *  - routing failure: kernel RX stays 0 while browsing  -> packets never reach tun0
      *  - read failure:    kernel RX increases, bridge stats stay 0 -> library not reading the fd
      *
-     * Read order: /sys/class/net/<tun>/statistics/* (sysfs, world-readable) then
+     * Read order: /sys/class/net/&lt;tun&gt;/statistics (sysfs, world-readable) then
      * /proc/net/dev. On failure the exact exception is reported instead of a bare
      * "UNREADABLE" so we can tell SELinux denial apart from a missing interface.
      */
