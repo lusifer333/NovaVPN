@@ -15,6 +15,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <linux/if_tun.h>
 #include <android/log.h>
 
 #include <hev-socks5-tunnel.h>
@@ -34,6 +38,30 @@ typedef struct {
 
 static pthread_t tunnel_thread_id;
 static volatile int tunnel_running;
+
+/* ──────────────────────────────────────────────
+ * JNI: nativeGetTunName(tunFd: Int): String
+ *
+ * Retrieves the TUN interface name (e.g. "tun0") from the fd
+ * returned by VpnService.Builder.establish(), via TUNGETIFF ioctl.
+ * Returns null if the ioctl fails (caller handles it).
+ * ────────────────────────────────────────────── */
+JNIEXPORT jstring JNICALL
+Java_com_novavpn_app_service_NativeBridgeRunner_nativeGetTunName(
+    JNIEnv *env, jclass clazz, jint tun_fd)
+{
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+
+    if (ioctl(tun_fd, TUNGETIFF, &ifr) < 0) {
+        LOGE("nativeGetTunName: TUNGETIFF failed for fd=%d: %s",
+             tun_fd, strerror(errno));
+        return NULL;
+    }
+
+    LOGI("nativeGetTunName: fd=%d -> %s", tun_fd, ifr.ifr_name);
+    return (*env)->NewStringUTF(env, ifr.ifr_name);
+}
 
 /* ──────────────────────────────────────────────
  * JNI: nativeStartTunnel(configPath: String, tunFd: Int): Boolean
