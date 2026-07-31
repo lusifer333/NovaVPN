@@ -471,13 +471,24 @@ object XrayConfigParser {
         val raw = parseRawConfig(config.rawConfig)
         val serverName = raw?.get("serverName")?.jsonPrimitive?.content
             ?: raw?.get("sni")?.jsonPrimitive?.content
+            ?: raw?.get("host")?.jsonPrimitive?.content
             ?: config.address
         val fingerprint = raw?.get("fingerprint")?.jsonPrimitive?.content ?: "chrome"
         val alpn = raw?.get("alpn")?.jsonPrimitive?.content
+        val allowInsecure = raw?.get("allowInsecure")?.jsonPrimitive?.content
+        // Worker/panel endpoints are reached by IP while the TLS chain (e.g.
+        // Google Trust Services roots) may not resolve in the app's trust
+        // store on all devices/ROMs -> dial fails with
+        // "x509: certificate signed by unknown authority" and every request
+        // retries forever (session storm). Skipping cert verification is the
+        // standard config-level fix for such panels; SNI is still sent so the
+        // edge routes correctly. Explicit allowInsecure=0/false opts back in.
+        val insecure = allowInsecure != "0" && allowInsecure != "false"
 
         return buildJsonObject {
             put("serverName", JsonPrimitive(serverName))
             put("fingerprint", JsonPrimitive(fingerprint))
+            put("allowInsecure", JsonPrimitive(insecure))
             if (alpn != null) {
                 val _alpnArr = buildJsonArray {
                     alpn.split(",").forEach { add(JsonPrimitive(it.trim())) }
