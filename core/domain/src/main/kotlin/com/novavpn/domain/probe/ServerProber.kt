@@ -183,8 +183,8 @@ class ServerProber @Inject constructor() {
         if (rawConfig.isBlank()) return fallback
         val trimmed = rawConfig.trimStart()
         if (!trimmed.startsWith("{")) {
-            // URI form: vless://host:port?params
-            val params = trimmed.substringAfter("?", "").split("&")
+            // URI form: vless://host:port?params#fragment
+            val params = trimmed.substringAfter("?", "").substringBefore("#").split("&")
             for (p in params) {
                 val kv = p.split("=", limit = 2)
                 if (kv.size == 2 && (kv[0] == "serverName" || kv[0] == "sni") && kv[1].isNotBlank()) {
