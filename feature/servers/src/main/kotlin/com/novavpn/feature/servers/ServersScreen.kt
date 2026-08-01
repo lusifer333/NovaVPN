@@ -42,6 +42,21 @@ fun ServersScreen(
             NovaTopBar(
                 title = "Servers",
                 actions = {
+                    if (state.isTesting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        IconButton(onClick = { viewModel.refreshTests() }) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Test servers"
+                            )
+                        }
+                    }
                     IconButton(onClick = { searchExpanded = !searchExpanded }) {
                         Icon(
                             if (searchExpanded) Icons.Default.Close else Icons.Default.Search,
@@ -109,6 +124,7 @@ fun ServersScreen(
                         ServerListItem(
                             server = server,
                             isSelected = server.id == state.selectedServerId,
+                            probeResult = state.testResults[server.id],
                             onTap = { viewModel.selectServer(server) }
                         )
                     }

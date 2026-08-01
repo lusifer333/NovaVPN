@@ -11,12 +11,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.novavpn.domain.model.VpnState
+import com.novavpn.domain.model.CertStatus
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.model.ServerProbeResult
 import com.novavpn.domain.model.Subscription
+import com.novavpn.domain.model.VpnState
 import com.novavpn.ui.theme.*
 
 /**
@@ -130,6 +133,7 @@ fun ServerListItem(
     isSelected: Boolean,
     latencyMs: Long? = null,
     isHealthy: Boolean? = null,
+    probeResult: ServerProbeResult? = null,
     onTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -208,8 +212,57 @@ fun ServerListItem(
                 HealthIndicator(isHealthy = isHealthy)
             }
         }
+
+        // Two-stage fast test badges: ⚡ TCP RTT + 🔒 TLS handshake + cert
+        if (probeResult != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ProbeBadge(
+                    text = probeResult.tcpMs?.let { "⚡ ${it}ms" } ?: "⚡ ✗",
+                    color = if (probeResult.tcpOk) StatusHealthy else StatusUnhealthy
+                )
+                if (probeResult.tcpOk) {
+                    ProbeBadge(
+                        text = probeResult.tlsMs?.let { "🔒 ${it}ms" } ?: "🔒 ✗",
+                        color = if (probeResult.tlsOk) StatusHealthy else StatusUnhealthy
+                    )
+                    CertBadge(probeResult.certStatus)
+                }
+            }
+        }
         }
     }
+}
+
+/** Small colored badge for a probe stage result. */
+@Composable
+private fun ProbeBadge(text: String, color: Color) {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = color.copy(alpha = 0.12f)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/** Certificate status badge: 🛡️ valid / ⚠️ self-signed / ✗ invalid. */
+@Composable
+private fun CertBadge(status: CertStatus) {
+    val (text, color) = when (status) {
+        CertStatus.VALID -> "🛡️✓" to StatusHealthy
+        CertStatus.SELF_SIGNED -> "🛡️⚠" to Color(0xFFFFA000)
+        CertStatus.INVALID_CHAIN -> "🛡️✗" to StatusUnhealthy
+        CertStatus.NONE -> return
+    }
+    ProbeBadge(text = text, color = color)
 }
 
 /**
