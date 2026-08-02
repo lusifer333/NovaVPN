@@ -165,7 +165,9 @@ class MineFillerTest {
             filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
         }
         coVerify(exactly = 1) { e2e.start(any(), any()) }
-        coVerify(exactly = 1) { e2e.stop() }
+        // The engine session is torn down at least once — the per-chunk
+        // finally plus the outer safety net (both idempotent) → ≥ 1 stop.
+        coVerify(atLeast = 1) { e2e.stop() }
     }
 
     @Test
@@ -194,7 +196,9 @@ class MineFillerTest {
         }
         // chunk 1 admits 6, chunk 2 admits 6 → mine full after session 2
         assertEquals(2, sessions.size)
-        coVerify(exactly = sessions.size) { e2e.stop() }
+        // each session is stopped (per-chunk finally) plus the outer safety
+        // net → stop counters at least as often as sessions started.
+        coVerify(atLeast = sessions.size) { e2e.stop() }
         assertTrue(
             "every engine session must carry at most CHUNK_SIZE candidates",
             sessions.all { it.size <= MineFiller.CHUNK_SIZE }
@@ -231,8 +235,13 @@ class MineFillerTest {
         val job = CoroutineScope(Dispatchers.Default).launch {
             filler.fill(listOf(ProfileServers("p1", "P1", (0 until 20).map { server("s$it") })))
         }
-        job.cancel()
-        runBlocking { job.join() }
+        runBlocking {
+            // Let the fill boot the session and park each probe in a long
+            // delay before cancelling — otherwise cancel can race the start.
+            delay(200)
+            job.cancel()
+            job.join()
+        }
         // stop is idempotent; per-chunk finally + the outer safety net
         coVerify(atLeast = 1) { e2e.stop() }
     }
