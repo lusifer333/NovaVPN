@@ -219,7 +219,7 @@ class MineFiller(
         filled
     }
 
-    private companion object {
+    companion object {
         // sing-box's urltest exercises ALL outbounds at once; a bounded
         // wave keeps the phone responsive while still streaming fast.
         const val DEFAULT_E2E_PARALLELISM = 8

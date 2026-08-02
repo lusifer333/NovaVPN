@@ -2,11 +2,7 @@ package com.novavpn.domain.probe
 
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
-import io.mockk.capture
-import io.mockk.coEvery
-import io.mockk.coVerify
-import io.mockk.eq
-import io.mockk.mockk
+import io.mockk.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -184,7 +180,7 @@ class MineFillerTest {
         coEvery { e2e.start(capture(sessions), any()) } returns true
         coEvery { e2e.probe(any()) } answers {
             val id = firstArg<String>()
-            if (id.toInt() in healthyIds) RealDelayOutcome(true, 60) else RealDelayOutcome(false)
+            if (id.toInt() in healthy) RealDelayOutcome(true, 60) else RealDelayOutcome(false)
         }
         coEvery { e2e.stop() } returns Unit
 
@@ -236,7 +232,7 @@ class MineFillerTest {
             filler.fill(listOf(ProfileServers("p1", "P1", (0 until 20).map { server("s$it") })))
         }
         job.cancel()
-        job.join()
+        runBlocking { job.join() }
         // stop is idempotent; per-chunk finally + the outer safety net
         coVerify(atLeast = 1) { e2e.stop() }
     }

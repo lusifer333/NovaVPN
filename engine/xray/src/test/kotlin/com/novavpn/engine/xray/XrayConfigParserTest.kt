@@ -380,7 +380,7 @@ class XrayConfigParserTest {
             name = "Test", address = "test.example.com", port = 443,
             protocol = Protocol.VLESS, transport = Transport.WebSocket,
             security = Security.Reality,
-            rawConfig = """"{"id":"x","encryption":"none","flow":"","serverName":"test.example.com","publicKey":"ZWFkW1NpZ25l","shortId":"abcd","spiderX":""}""",
+            rawConfig = """{"id":"x","encryption":"none","flow":"","serverName":"test.example.com","publicKey":"ZWFkW1NpZ25l","shortId":"abcd","spiderX":""}""",
             engineFormat = EngineFormat.XrayJson
         )
         val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes, fragmentTls = true))
@@ -393,7 +393,7 @@ class XrayConfigParserTest {
 
     @Test
     fun `keepAlive off omits tcp keepalive sockopt`() {
-        val root = gen(Protocol.Trojan, """"{"id":"x","password":"x"}"""", keepAlive = false)
+        val root = gen(Protocol.Trojan, """{"id":"x","password":"x"}""", keepAlive = false)
         val proxy = proxyOutbound(root)
         val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
         assertNull("no tcpKeepAliveIdle", sockopt["tcpKeepAliveIdle"])
@@ -402,7 +402,7 @@ class XrayConfigParserTest {
 
     @Test
     fun `fakeDns enables fake-IP pool and local dns routing`() {
-        val root = gen(Protocol.VLESS, """""{"id":"x","encryption":"none"}"""", fakeDns = true)
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""", fakeDns = true)
 
         // dns section carries the fakeip pool + UseIP query strategy
         val dnsObj = root["dns"]!!.jsonObject
@@ -427,7 +427,7 @@ class XrayConfigParserTest {
 
     @Test
     fun `fakeDns adds sniffing to inbounds for fake-IP remapping`() {
-        val root = gen(Protocol.Trojan, """"{"id":"x","password":"x"}"""", fakeDns = true)
+        val root = gen(Protocol.Trojan, """{"id":"x","password":"x"}""", fakeDns = true)
         val inbounds = root["inbounds"]!!.jsonArray!!
         val socks = inbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "socks-in" }.jsonObject
         val sniffing = socks["sniffing"]!!.jsonObject
