@@ -30,11 +30,13 @@ class FillMineUseCase @Inject constructor(
     suspend operator fun invoke(
         profiles: List<ProfileServers>,
         options: ProbeOptions = ProbeOptions(),
+        previousMine: List<ServerConfig> = emptyList(),
         onResult: (ServerProbeResult) -> Unit = {},
         onMine: (List<ServerConfig>) -> Unit = {}
     ): MineFillResult = MineFiller(realDelayProber).fill(
         profiles = profiles,
         options = options,
+        previousMine = previousMine,
         onResult = onResult,
         onMine = onMine
     )

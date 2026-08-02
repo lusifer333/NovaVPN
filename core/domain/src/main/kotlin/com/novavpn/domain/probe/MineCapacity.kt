@@ -21,10 +21,11 @@ object MineCapacity {
     const val MAX_CAPACITY = 12
 
     /**
-     * Target mine capacity ratio: 20% of the catalog (user-requested —
-     * 30% produced oversized mines that diluted quality).
+     * Target mine capacity ratio: 10% of the catalog (was 20%, reduced
+     * to keep only the best relays — a tighter mine means better quality
+     * and lower churn on each fill cycle).
      */
-    const val TARGET_RATIO: Double = 0.20
+    const val TARGET_RATIO: Double = 0.10
 
     /** Total mine capacity for [totalServers] servers across all profiles. */
     fun capacityOf(totalServers: Int): Int {

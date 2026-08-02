@@ -7,6 +7,7 @@ import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.probe.ProbeOptions
 import com.novavpn.domain.probe.ProfileServers
+import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
@@ -46,7 +47,8 @@ class HomeViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val settingsRepository: SettingsRepository,
     private val fillMineUseCase: FillMineUseCase,
-    private val vpnServiceStarter: VpnServiceStarter
+    private val vpnServiceStarter: VpnServiceStarter,
+    private val mineRepository: MineRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(HomeUiState())
@@ -169,7 +171,7 @@ class HomeViewModel @Inject constructor(
             fragmentTls = settings.enableTlsFragment,
             keepAlive = settings.enableTcpKeepAlive
         )
-        val result = fillMineUseCase(profiles, options)
+        val result = fillMineUseCase(profiles, options, previousMine = mineRepository.get().getOrElse { emptyList() })
         return result.mine.firstOrNull()
     }
 

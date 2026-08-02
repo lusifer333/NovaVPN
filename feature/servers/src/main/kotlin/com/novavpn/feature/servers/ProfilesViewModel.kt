@@ -164,6 +164,7 @@ class ProfilesViewModel @Inject constructor(
             val result = fillMineUseCase(
                 profiles = profiles,
                 options = options,
+                previousMine = current.mine,
                 onResult = { res ->
                     if (res.serverId.isNotBlank()) {
                         pending[res.serverId] = res

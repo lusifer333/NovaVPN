@@ -60,6 +60,9 @@ class MineFiller(
      * @param options how each engine session is built (TLS fragment /
      *        TCP keepalive mirror the real connection settings so the
      *        probe verdict is honest).
+     * @param previousMine servers carried over from the last fill run
+     *        (orphans — servers no longer in any profile — are silently
+     *        dropped; the warm start is early-returned if already full).
      * @param onResult per-server outcome, emitted as soon as it completes.
      * @param onMine current mine contents, emitted on every change.
      */
@@ -67,6 +70,7 @@ class MineFiller(
         profiles: List<ProfileServers>,
         e2eParallelism: Int = DEFAULT_E2E_PARALLELISM,
         options: ProbeOptions = ProbeOptions(),
+        previousMine: List<ServerConfig> = emptyList(),
         onResult: (ServerProbeResult) -> Unit = {},
         onMine: (List<ServerConfig>) -> Unit = {}
     ): MineFillResult {
@@ -79,6 +83,29 @@ class MineFiller(
         val mineIds = mutableSetOf<String>()
         val filledByProfile = mutableMapOf<String, Int>()
         val semaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
+
+        // Warm-start: seed the mine from previous run (survives app restart).
+        // Orphans (no longer in any profile) are silently dropped.
+        val aliveIds = profiles.flatMap { it.servers.map { s -> s.id } }.toSet()
+        val warmServers = previousMine.filter { it.id in aliveIds }
+        if (warmServers.isNotEmpty()) {
+            for (s in warmServers) {
+                if (mineIds.add(s.id)) {
+                    mine += s
+                    // Count into the first profile that owns this server.
+                    val ownerId = profiles.firstOrNull { it.servers.any { srv -> srv.id == s.id } }?.profileId
+                    if (ownerId != null) {
+                        filledByProfile[ownerId] = (filledByProfile[ownerId] ?: 0) + 1
+                    }
+                    onMine(mine.toList())
+                }
+            }
+            // Early-return if warm start already filled the mine.
+            if (mine.size >= capacity) {
+                val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
+                return MineFillResult(sorted, results)
+            }
+        }
 
         try {
             profileLoop@ for (profile in profiles) {
@@ -222,7 +249,8 @@ class MineFiller(
     companion object {
         // sing-box's urltest exercises ALL outbounds at once; a bounded
         // wave keeps the phone responsive while still streaming fast.
-        const val DEFAULT_E2E_PARALLELISM = 16
+        // Bumped from 16 to 24 for a faster fill on large catalogs.
+        const val DEFAULT_E2E_PARALLELISM = 24
 
         // Bounded engine session size. Android's RLIMIT_NOFILE is ~1024
         // and each probe outbound needs descriptors, so chunks of 100 keep

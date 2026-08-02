@@ -6,17 +6,19 @@ import org.junit.Test
 class MineCapacityTest {
 
     // ------------------------------------------------------------------
-    // Total capacity: clamp(ceil(total × 20%), 3, 12)
+    // Total capacity: clamp(ceil(total × 10%), 3, 12)
     // ------------------------------------------------------------------
 
     @Test
     fun `capacity scales with server count`() {
         assertEquals(0, MineCapacity.capacityOf(0))
-        assertEquals(3, MineCapacity.capacityOf(5))     // ceil(1.0)=1 → clamped to 3
-        assertEquals(3, MineCapacity.capacityOf(10))    // ceil(2)=2 → clamped to 3
-        assertEquals(4, MineCapacity.capacityOf(20))    // ceil(4.0)=4
-        assertEquals(6, MineCapacity.capacityOf(30))    // ceil(6.0)=6
-        assertEquals(10, MineCapacity.capacityOf(50))   // ceil(10)=10
+        assertEquals(3, MineCapacity.capacityOf(5))     // ceil(0.5)=1 → clamped to 3
+        assertEquals(3, MineCapacity.capacityOf(10))    // ceil(1)=1 → clamped to 3
+        assertEquals(3, MineCapacity.capacityOf(20))    // ceil(2)=2 → clamped to 3
+        assertEquals(4, MineCapacity.capacityOf(30))    // ceil(3)=3
+        assertEquals(5, MineCapacity.capacityOf(40))    // ceil(4)=4
+        assertEquals(6, MineCapacity.capacityOf(50))    // ceil(5)=5
+        assertEquals(10, MineCapacity.capacityOf(100))  // ceil(10)=10
         assertEquals(12, MineCapacity.capacityOf(2000)) // capped
     }
 
@@ -38,10 +40,10 @@ class MineCapacityTest {
 
     @Test
     fun `share is proportional to profile size`() {
-        // 55 servers total → capacity 12; A=5, B=50 → A=1, B=11
-        val shares = MineCapacity.profileShares(12, 55, listOf(5, 50))
+        // 55 servers total → capacity clamp(ceil(5.5),3,12)=6; A=5, B=50 → A=1, B=5
+        val shares = MineCapacity.profileShares(6, 55, listOf(5, 50))
         assertEquals(1, shares[0])
-        assertEquals(11, shares[1])
+        assertEquals(5, shares[1])
     }
 
     @Test
@@ -53,7 +55,7 @@ class MineCapacityTest {
 
     @Test
     fun `each profile gets at least one slot`() {
-        // Two profiles, one tiny: 199 vs 1 of 200 → capacity 12
+        // Two profiles, one tiny: 199 vs 1 of 200 → capacity clamp(ceil(20),3,12)=12
         val shares = MineCapacity.profileShares(12, 200, listOf(199, 1))
         assertEquals(12, shares[0]) // 199/200 of 12 → 11.94 → rounds to 12
         assertEquals(1, shares[1])  // tiny profile keeps its guaranteed slot
