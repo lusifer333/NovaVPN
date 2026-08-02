@@ -21,12 +21,17 @@ enum class CertStatus {
 }
 
 /**
- * Result of the two-stage fast server test:
+ * Result of the three-stage server test:
  *  1. [tcpOk]/[tcpMs] — raw TCP connect RTT (fast ping).
  *  2. [tlsOk]/[tlsMs] — trust-all TLS handshake (reliability check),
  *     plus [certStatus] as an informational certificate badge.
+ *  3. [e2eOk]/[e2eMs] — real-delay relay round-trip through the actual
+ *     engine (SOCKS5 CONNECT + DNS reply). Only run for servers that
+ *     passed stages 1+2.
  *
- * A server counts as usable ([healthy]) only when BOTH stages pass.
+ * A server counts as usable ([healthy]) only when ALL stages pass.
+ * [green] is the two-stage definition (TCP + TLS) used before the
+ * real-delay stage is attempted.
  */
 data class ServerProbeResult(
     val serverId: String = "",
@@ -34,7 +39,10 @@ data class ServerProbeResult(
     val tcpMs: Long? = null,
     val tlsOk: Boolean = false,
     val tlsMs: Long? = null,
-    val certStatus: CertStatus = CertStatus.NONE
+    val certStatus: CertStatus = CertStatus.NONE,
+    val e2eOk: Boolean = false,
+    val e2eMs: Long? = null
 ) {
-    val healthy: Boolean get() = tcpOk && tlsOk
+    val green: Boolean get() = tcpOk && tlsOk
+    val healthy: Boolean get() = green && e2eOk
 }

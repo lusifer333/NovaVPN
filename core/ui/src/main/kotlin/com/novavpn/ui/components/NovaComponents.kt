@@ -231,6 +231,15 @@ fun ServerListItem(
                     )
                     CertBadge(probeResult.certStatus)
                 }
+                // Real-delay stage (🚀) — only attempted for two-stage greens.
+                // Shown as "🚀 ✗" when the relay round-trip failed, proving
+                // handshake-yes/data-no servers stay out of the mine.
+                if (probeResult.green) {
+                    ProbeBadge(
+                        text = probeResult.e2eMs?.let { "🚀 ${it}ms" } ?: "🚀 ✗",
+                        color = if (probeResult.e2eOk) StatusHealthy else StatusUnhealthy
+                    )
+                }
             }
         }
         }

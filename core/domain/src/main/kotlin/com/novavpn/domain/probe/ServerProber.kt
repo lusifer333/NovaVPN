@@ -109,6 +109,51 @@ class ServerProber @Inject constructor() {
         return tlsProbeAll(servers, stage1, tlsTimeoutMs, parallelism)
     }
 
+    /**
+     * Merged probe: TCP connect AND TLS handshake on the SAME socket.
+     *
+     * This is the pipeline unit of the mine filler — one connection, one
+     * round of parallelism, both stage-1 and stage-2 outcomes. Measures
+     * [ServerProbeResult.tcpMs] (connect) and [ServerProbeResult.tlsMs]
+     * (connect→handshake-complete) on the single socket, and classifies
+     * the presented certificate chain.
+     */
+    suspend fun fastTlsProbe(server: ServerConfig, timeoutMs: Long = DEFAULT_TLS_TIMEOUT_MS): ServerProbeResult {
+        if (!server.hasValidEndpoint()) return ServerProbeResult(server.id)
+        val sni = extractServerName(server.rawConfig, server.address)
+        val start = System.nanoTime()
+        return try {
+            val outcome = withContext(Dispatchers.IO) {
+                val socket = trustAllSslContext.socketFactory.createSocket() as SSLSocket
+                socket.use {
+                    socket.connect(InetSocketAddress(server.address, server.port), timeoutMs.toInt())
+                    val tcpMs = (System.nanoTime() - start) / 1_000_000
+                    configureSni(socket, sni)
+                    socket.soTimeout = timeoutMs.toInt()
+                    socket.startHandshake()
+                    val tlsMs = (System.nanoTime() - start) / 1_000_000
+                    val certs = socket.session.peerCertificates
+                        .filterIsInstance<X509Certificate>()
+                    TlsOutcome(
+                        tlsOk = true,
+                        tlsMs = tlsMs,
+                        certStatus = classifyCert(certs, defaultTrustManager)
+                    ).let { tcpMs to it }
+                }
+            }
+            ServerProbeResult(
+                serverId = server.id,
+                tcpOk = true,
+                tcpMs = outcome.first,
+                tlsOk = outcome.second.tlsOk,
+                tlsMs = outcome.second.tlsMs,
+                certStatus = outcome.second.certStatus
+            )
+        } catch (e: Exception) {
+            ServerProbeResult(server.id)
+        }
+    }
+
     // ------------------------------------------------------------------
     // TLS stage
     // ------------------------------------------------------------------

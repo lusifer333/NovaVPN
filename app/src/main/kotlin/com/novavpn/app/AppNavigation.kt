@@ -14,7 +14,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.novavpn.feature.home.HomeScreen
 import com.novavpn.feature.subscriptions.SubscriptionsScreen
-import com.novavpn.feature.servers.ServersScreen
+import com.novavpn.feature.servers.ProfilesScreen
 import com.novavpn.feature.statistics.StatisticsScreen
 import com.novavpn.feature.settings.SettingsScreen
 import com.novavpn.feature.logs.LogsScreen
@@ -29,7 +29,7 @@ private data class BottomNavItem(
 private val bottomNavItems = listOf(
     BottomNavItem(Screen.Home, Icons.Default.Home, "Home"),
     BottomNavItem(Screen.Subscriptions, Icons.Default.Dns, "Subscriptions"),
-    BottomNavItem(Screen.Servers, Icons.Default.Hub, "Servers"),
+    BottomNavItem(Screen.Servers, Icons.Default.Hub, "Profiles"),
     BottomNavItem(Screen.Statistics, Icons.Default.BarChart, "Stats"),
     BottomNavItem(Screen.Settings, Icons.Default.Settings, "Settings")
 )
@@ -97,7 +97,7 @@ fun AppNavigation() {
             }
 
             composable(Screen.Servers.route) {
-                ServersScreen()
+                ProfilesScreen()
             }
 
             composable(Screen.Statistics.route) {
