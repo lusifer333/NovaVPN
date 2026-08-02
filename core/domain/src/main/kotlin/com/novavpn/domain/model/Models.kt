@@ -244,6 +244,7 @@ data class AppSettings(
     val enableFakeDns: Boolean = false,
     val enableBlockQuic: Boolean = false,
     val enableTlsFragment: Boolean = false,
+    val enableTcpKeepAlive: Boolean = true,
     val enableIPv6: Boolean = true,
     val enablePerAppVpn: Boolean = false,
     val enableSplitTunnel: Boolean = false,

@@ -150,3 +150,23 @@ interface LogRepository {
     /** Count logs by level. */
     suspend fun countByLevel(): Map<LogLevel, Int>
 }
+
+/**
+ * Repository for the curated "mine" (معدن) — the bounded reservoir of
+ * healthy relays produced by a mine fill. Persisted so the curated list
+ * survives app restarts instead of disappearing when the process dies.
+ */
+interface MineRepository {
+
+    /** Observe the persisted mine as a flow (best-first order). */
+    fun observe(): Flow<List<ServerConfig>>
+
+    /** The currently persisted mine, or empty. */
+    suspend fun get(): List<ServerConfig>
+
+    /** Persist the curated mine (fastest healthy relays first). */
+    suspend fun save(mine: List<ServerConfig>)
+
+    /** Drop the persisted mine. */
+    suspend fun clear()
+}

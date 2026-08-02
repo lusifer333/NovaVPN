@@ -352,6 +352,90 @@ class XrayConfigParserTest {
         assertNull("no cipherSuites by default", tls["cipherSuites"])
     }
 
+    @Test
+    fun `QUIC transport never fragments even with fragment enabled`() {
+        // Regression guard for the TLS-fragment corruption: QUIC (and UDP
+        // h3) must stay pristine — the fragment-out only ever applies to
+        // TCP/TLS ClientHellos, never to QUIC transport.
+        val config = ServerConfig(
+            name = "Test", address = "test.example.com", port = 443,
+            protocol = Protocol.VLESS, transport = Transport.QUIC,
+            security = Security.None,
+            rawConfig = "\"\"\"{\"id\":\"x\",\"encryption\":\"none\"}\"\"\"",
+            engineFormat = EngineFormat.XrayJson
+        )
+        val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes, fragmentTls = true))
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        assertTrue("no fragment-out for QUIC", outbounds.none { it.jsonObject["tag"]?.jsonPrimitive?.content == "fragment-out" })
+        val proxy = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "proxy" }.jsonObject
+        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
+        assertNull("no dialerProxy for QUIC", sockopt["dialerProxy"])
+    }
+
+    @Test
+    fun `Reality server never emits fragment outbound`() {
+        // Reality is transport-level security inside streamSettings; the
+        // fragment knock (dialerProxy) MUST NOT be attached to it.
+        val config = ServerConfig(
+            name = "Test", address = "test.example.com", port = 443,
+            protocol = Protocol.VLESS, transport = Transport.WebSocket,
+            security = Security.Reality,
+            rawConfig = """"{"id":"x","encryption":"none","flow":"","serverName":"test.example.com","publicKey":"ZWFkW1NpZ25l","shortId":"abcd","spiderX":""}""",
+            engineFormat = EngineFormat.XrayJson
+        )
+        val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes, fragmentTls = true))
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        assertTrue("no fragment-out for Reality", outbounds.none { o -> o.jsonObject["tag"]?.jsonPrimitive?.content == "fragment-out" })
+        val proxy = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "proxy" }.jsonObject
+        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!
+        assertNull("no dialerProxy for Reality", sockopt.jsonObject["dialerProxy"])
+    }
+
+    @Test
+    fun `keepAlive off omits tcp keepalive sockopt`() {
+        val root = gen(Protocol.Trojan, """"{"id":"x","password":"x"}"""", keepAlive = false)
+        val proxy = proxyOutbound(root)
+        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
+        assertNull("no tcpKeepAliveIdle", sockopt["tcpKeepAliveIdle"])
+        assertNull("no tcpKeepAliveInterval", sockopt["tcpKeepAliveInterval"])
+    }
+
+    @Test
+    fun `fakeDns enables fake-IP pool and local dns routing`() {
+        val root = gen(Protocol.VLESS, """""{"id":"x","encryption":"none"}"""", fakeDns = true)
+
+        // dns section carries the fakeip pool + UseIP query strategy
+        val dnsObj = root["dns"]!!.jsonObject
+        assertTrue("UseIP query strategy", dnsObj["queryStrategy"]!!.jsonPrimitive.content == "UseIP")
+        val fakeip = dnsObj["fakeip"]!!.jsonObject
+        assertEquals("true", fakeip["enabled"]!!.jsonPrimitive.content)
+        assertEquals("198.18.0.0/15", fakeip["ip4"]!!.jsonPrimitive.content)
+
+        // dedicated dns-out freedom outbound exists
+        val outbounds = root["outbounds"]!!.jsonArray!!
+        assertTrue("dns-out present", outbounds.any { it.jsonObject["tag"]?.jsonPrimitive?.content == "dns-out" })
+
+        // routing: port-53 → dns-out, fake-IP pool → proxy, IPIfNonMatch strategy
+        val routing = root["routing"]!!.jsonObject
+        assertEquals("IPIfNonMatch", routing["domainStrategy"]!!.jsonPrimitive.content)
+        val rules = routing["rules"]!!.jsonArray!!
+        assertTrue("port 53→dns-out", rules.any { r ->
+            r.jsonObject["port"]?.jsonPrimitive?.content == "53" &&
+                r.jsonObject["outboundTag"]?.jsonPrimitive?.content == "dns-out"
+        })
+    }
+
+    @Test
+    fun `fakeDns adds sniffing to inbounds for fake-IP remapping`() {
+        val root = gen(Protocol.Trojan, """"{"id":"x","password":"x"}"""", fakeDns = true)
+        val inbounds = root["inbounds"]!!.jsonArray!!
+        val socks = inbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "socks-in" }.jsonObject
+        val sniffing = socks["sniffing"]!!.jsonObject
+        assertEquals("true", sniffing["enabled"]!!.jsonPrimitive.content)
+        assertTrue("destOverride includes http", sniffing["destOverride"]!!.jsonArray.any { it.jsonPrimitive.content == "http" })
+        assertTrue("destOverride includes tls", sniffing["destOverride"]!!.jsonArray.any { it.jsonPrimitive.content == "tls" })
+    }
+
     // ------------------------------------------------------------------
     // Helper: generate full Xray config and parse it
     // ------------------------------------------------------------------
@@ -360,7 +444,9 @@ class XrayConfigParserTest {
         proto: Protocol,
         rawConfig: String,
         blockQuic: Boolean = false,
-        fragmentTls: Boolean = false
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true,
+        fakeDns: Boolean = false
     ): JsonObject {
         val config = ServerConfig(
             name = "Test",
@@ -374,7 +460,8 @@ class XrayConfigParserTest {
         )
         val jsonStr = XrayConfigParser.toXrayJson(
             config, dns, routes,
-            blockQuic = blockQuic, fragmentTls = fragmentTls
+            blockQuic = blockQuic, fragmentTls = fragmentTls,
+            keepAlive = keepAlive, fakeDns = fakeDns
         )
         return parseObj(jsonStr)
     }

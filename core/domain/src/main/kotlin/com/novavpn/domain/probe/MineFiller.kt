@@ -33,8 +33,13 @@ data class MineFillResult(
  * separate handshake stage anymore: a server either relays traffic or it
  * doesn't, and only relaying servers enter the mine.
  *
- * All probes run against ONE shared engine session ([RealDelayProber.start]),
- * so the fill is fast and the phone never freezes (no per-server spawns).
+ * Candidates are fed to the engine in bounded [CHUNK_SIZE] sessions — the
+ * engine never sees more than CHUNK_SIZE outbounds at once. This is what
+ * keeps a multi-thousand-server subscription usable on Android, where a
+ * single fan-out config would blow past RLIMIT_NOFILE (~1024) and freeze
+ * the phone. Each chunk shares the same bounded wave, so mine quality and
+ * early-stop semantics are preserved across chunks.
+ *
  * Results stream in completion order (best-first) with early-stop: the
  * mine fills with the fastest relays first, per-profile shares (see
  * [MineCapacity]) are respected, and probes still running when the mine
@@ -52,37 +57,30 @@ class MineFiller(
      *
      * @param profiles subscription groups, processed in order.
      * @param e2eParallelism concurrent real-delay probes (bounded wave).
+     * @param options how each engine session is built (TLS fragment /
+     *        TCP keepalive mirror the real connection settings so the
+     *        probe verdict is honest).
      * @param onResult per-server outcome, emitted as soon as it completes.
      * @param onMine current mine contents, emitted on every change.
      */
     suspend fun fill(
         profiles: List<ProfileServers>,
         e2eParallelism: Int = DEFAULT_E2E_PARALLELISM,
+        options: ProbeOptions = ProbeOptions(),
         onResult: (ServerProbeResult) -> Unit = {},
         onMine: (List<ServerConfig>) -> Unit = {}
     ): MineFillResult {
         val totalServers = profiles.sumOf { it.servers.size }
-        val allServers = profiles.flatMap { it.servers }
-        var engineStarted = false
+        if (totalServers <= 0) return MineFillResult(emptyList(), emptyMap())
+
+        val capacity = MineCapacity.capacityOf(totalServers)
+        val results = mutableMapOf<String, ServerProbeResult>()
+        val mine = mutableListOf<ServerConfig>()
+        val mineIds = mutableSetOf<String>()
+        val filledByProfile = mutableMapOf<String, Int>()
+        val semaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
+
         try {
-            if (totalServers > 0) {
-                engineStarted = try {
-                    realDelayProber.start(allServers)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    false
-                }
-            }
-            if (totalServers <= 0) return MineFillResult(emptyList(), emptyMap())
-
-            val capacity = MineCapacity.capacityOf(totalServers)
-            val results = mutableMapOf<String, ServerProbeResult>()
-            val mine = mutableListOf<ServerConfig>()
-            val mineIds = mutableSetOf<String>()
-            val filledByProfile = mutableMapOf<String, Int>()
-            val semaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
-
             profileLoop@ for (profile in profiles) {
                 if (profile.servers.isEmpty()) continue
                 if (mine.size >= capacity) break
@@ -93,36 +91,61 @@ class MineFiller(
                 )
                 if (share <= 0) continue
 
-                // The single Karing urltest wave over this profile's servers.
-                val filled = e2eWave(
-                    servers = profile.servers,
-                    semaphore = semaphore,
-                    engineUp = engineStarted,
-                    mine = mine,
-                    mineIds = mineIds,
-                    capacity = capacity,
-                    profileId = profile.profileId,
-                    share = share,
-                    filledByProfile = filledByProfile,
-                    results = results,
-                    onResult = onResult,
-                    onMine = onMine
-                )
-                if (filled) continue@profileLoop
+                // A bounded engine session per chunk: the generated config
+                // stays tiny (≤ CHUNK_SIZE outbounds) so Android's
+                // RLIMIT_NOFILE (~1024) is never exhausted, while the same
+                // shared wait + early-stop spans all of a profile's chunks.
+                for (chunk in profile.servers.chunked(CHUNK_SIZE)) {
+                    if (mine.size >= capacity) break@profileLoop
+                    if ((filledByProfile[profile.profileId] ?: 0) >= share) continue@profileLoop
+
+                    val engineUp = try {
+                        realDelayProber.start(chunk, options)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        false
+                    }
+                    try {
+                        val filled = e2eWave(
+                            servers = chunk,
+                            semaphore = semaphore,
+                            engineUp = engineUp,
+                            mine = mine,
+                            mineIds = mineIds,
+                            capacity = capacity,
+                            profileId = profile.profileId,
+                            share = share,
+                            filledByProfile = filledByProfile,
+                            results = results,
+                            onResult = onResult,
+                            onMine = onMine
+                        )
+                        if (filled) continue@profileLoop
+                    } finally {
+                        try {
+                            realDelayProber.stop()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // engine stop must never mask the fill result
+                        }
+                    }
+                }
             }
 
             // Best-first: sorted by round-trip delay (ascending).
             val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
             return MineFillResult(sorted, results)
         } finally {
-            if (engineStarted) {
-                try {
-                    realDelayProber.stop()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // engine stop must never mask the fill result
-                }
+            // Safety net: if the fill was cancelled mid-chunk, ensure the
+            // session is torn down too (stop is idempotent).
+            try {
+                realDelayProber.stop()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // engine stop must never mask the fill result
             }
         }
     }
@@ -200,5 +223,11 @@ class MineFiller(
         // sing-box's urltest exercises ALL outbounds at once; a bounded
         // wave keeps the phone responsive while still streaming fast.
         const val DEFAULT_E2E_PARALLELISM = 8
+
+        // Bounded engine session size. Android's RLIMIT_NOFILE is ~1024
+        // and each probe outbound needs descriptors, so chunks of 100 keep
+        // the generated xray config small and the engine alive even for
+        // 2000+ server subscriptions.
+        const val CHUNK_SIZE = 100
     }
 }

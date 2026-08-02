@@ -5,13 +5,17 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.dataStoreFile
 import com.novavpn.data.repository.LogRepositoryImpl
+import com.novavpn.data.repository.MineRepositoryImpl
 import com.novavpn.data.repository.ServerRepositoryImpl
 import com.novavpn.data.repository.SettingsRepositoryImpl
+import com.novavpn.storage.datastore.MineSerializer
 import com.novavpn.storage.datastore.SettingsSerializer
 import com.novavpn.data.repository.StatisticsRepositoryImpl
 import com.novavpn.data.repository.SubscriptionRepositoryImpl
 import com.novavpn.domain.model.AppSettings
+import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.repository.LogRepository
+import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.StatisticsRepository
@@ -72,6 +76,12 @@ abstract class DataModule {
         impl: LogRepositoryImpl
     ): LogRepository
 
+    @Binds
+    @Singleton
+    abstract fun bindMineRepository(
+        impl: MineRepositoryImpl
+    ): MineRepository
+
     // ── Provides ─────────────────────────────────────────────────────────────
 
     companion object {
@@ -124,6 +134,25 @@ abstract class DataModule {
         @Singleton
         fun provideSettingsSerializer(): SettingsSerializer {
             return SettingsSerializer
+        }
+
+        @Provides
+        @Singleton
+        fun provideMineSerializer(): MineSerializer {
+            return MineSerializer
+        }
+
+        @Provides
+        @Singleton
+        fun provideMineDataStore(
+            @ApplicationContext context: Context,
+            serializer: MineSerializer
+        ): DataStore<List<ServerConfig>> {
+            return DataStoreFactory.create(
+                serializer = serializer
+            ) {
+                java.io.File(context.filesDir, "novavpn_mine.json")
+            }
         }
 
         @Provides

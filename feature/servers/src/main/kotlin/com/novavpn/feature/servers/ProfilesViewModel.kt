@@ -2,17 +2,20 @@ package com.novavpn.feature.servers
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.novavpn.data.usecase.probe.FillMineUseCase
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import com.novavpn.domain.model.Subscription
 import com.novavpn.domain.probe.MineCapacity
-import com.novavpn.domain.probe.MineFiller
 import com.novavpn.domain.probe.ProfileServers
-import com.novavpn.domain.probe.RealDelayProber
+import com.novavpn.domain.probe.ProbeOptions
 import com.novavpn.domain.repository.ServerRepository
+import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
+import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.usecase.server.SelectServerUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,7 +53,9 @@ class ProfilesViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val serverRepository: ServerRepository,
     private val selectServerUseCase: SelectServerUseCase,
-    private val realDelayProber: RealDelayProber
+    private val settingsRepository: SettingsRepository,
+    private val fillMineUseCase: FillMineUseCase,
+    private val mineRepository: MineRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfilesUiState())
@@ -90,6 +95,14 @@ class ProfilesViewModel @Inject constructor(
                 _state.update { it.copy(selectedServerId = server?.id) }
             }
         }
+
+        // Restore the persisted mine so a freshly-opened app doesn't show
+        // an empty reservoir (the mine survives process death).
+        viewModelScope.launch {
+            mineRepository.observe().collect { mine ->
+                _state.update { it.copy(mine = mine) }
+            }
+        }
     }
 
     fun toggleProfile(subscriptionId: String) {
@@ -115,6 +128,13 @@ class ProfilesViewModel @Inject constructor(
      * shared engine; results stream in completion order (best-first) and
      * the fill stops the moment the mine is full. Per-profile shares are
      * respected.
+     *
+     * Runs entirely off the main thread:
+     * - the engine sessions are chunked (≤100 outbounds per session, see
+     *   [MineFiller.CHUNK_SIZE]) so Android's ~1024 RLIMIT_NOFILE is never
+     *   blown, which was the O(N²) freeze with ~2000 servers;
+     * - probe results are batched into the StateFlow at most every 100 ms
+     *   instead of one emission per server (no recomposition storm).
      */
     fun fillMine() {
         val current = _state.value
@@ -125,16 +145,35 @@ class ProfilesViewModel @Inject constructor(
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return
 
         _state.update { it.copy(isFilling = true, mine = emptyList(), results = emptyMap()) }
-        viewModelScope.launch {
-            val result = MineFiller(realDelayProber).fill(
+        viewModelScope.launch(Dispatchers.Default) {
+            val settings = settingsRepository.get()
+            val options = ProbeOptions(
+                fragmentTls = settings.enableTlsFragment,
+                keepAlive = settings.enableTcpKeepAlive
+            )
+            val pending = LinkedHashMap<String, ServerProbeResult>()
+            var lastEmitMs = 0L
+            fun flushBatch() {
+                if (pending.isEmpty()) return
+                val batch = pending.toMap()
+                pending.clear()
+                lastEmitMs = System.currentTimeMillis()
+                _state.update { it.copy(results = it.results + batch) }
+            }
+
+            val result = fillMineUseCase(
                 profiles = profiles,
+                options = options,
                 onResult = { res ->
                     if (res.serverId.isNotBlank()) {
-                        _state.update { it.copy(results = it.results + (res.serverId to res)) }
+                        pending[res.serverId] = res
+                        if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
                     }
                 },
                 onMine = { mine -> _state.update { it.copy(mine = mine) } }
             )
+            flushBatch()
+            mineRepository.save(result.mine)
             _state.update { it.copy(isFilling = false, mine = result.mine, results = result.results) }
         }
     }

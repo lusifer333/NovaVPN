@@ -6,17 +6,17 @@ import org.junit.Test
 class MineCapacityTest {
 
     // ------------------------------------------------------------------
-    // Total capacity: clamp(ceil(total × 30%), 3, 12)
+    // Total capacity: clamp(ceil(total × 20%), 3, 12)
     // ------------------------------------------------------------------
 
     @Test
     fun `capacity scales with server count`() {
         assertEquals(0, MineCapacity.capacityOf(0))
-        assertEquals(3, MineCapacity.capacityOf(5))     // ceil(1.5)=2 → clamped to 3
-        assertEquals(3, MineCapacity.capacityOf(10))    // ceil(3)=3
-        assertEquals(6, MineCapacity.capacityOf(20))    // ceil(6)=6
-        assertEquals(9, MineCapacity.capacityOf(30))    // ceil(9)=9
-        assertEquals(12, MineCapacity.capacityOf(50))   // 15 → clamped to 12
+        assertEquals(3, MineCapacity.capacityOf(5))     // ceil(1.0)=1 → clamped to 3
+        assertEquals(3, MineCapacity.capacityOf(10))    // ceil(2)=2 → clamped to 3
+        assertEquals(4, MineCapacity.capacityOf(20))    // ceil(4.0)=4
+        assertEquals(6, MineCapacity.capacityOf(30))    // ceil(6.0)=6
+        assertEquals(10, MineCapacity.capacityOf(50))   // ceil(10)=10
         assertEquals(12, MineCapacity.capacityOf(2000)) // capped
     }
 

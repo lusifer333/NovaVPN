@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import com.novavpn.domain.model.EngineType
 import com.novavpn.domain.model.Protocol
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.probe.ProbeOptions
 import com.novavpn.domain.probe.RealDelayOutcome
 import com.novavpn.domain.probe.RealDelayProber
 import com.novavpn.engine.api.BinaryManager
@@ -66,7 +67,10 @@ class XrayRealDelayProber @Inject constructor(
     private var configFile: File? = null
     private val portByServerId = HashMap<String, Int>()
 
-    override suspend fun start(candidates: List<ServerConfig>): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun start(
+        candidates: List<ServerConfig>,
+        options: ProbeOptions
+    ): Boolean = withContext(Dispatchers.IO) {
         if (process?.isAlive == true) return@withContext true
         var ok = false
         try {
@@ -81,7 +85,9 @@ class XrayRealDelayProber @Inject constructor(
             val json = XrayConfigParser.buildMineConfig(
                 servers = testable,
                 basePort = PROBE_BASE_PORT,
-                logDir = engineDir.absolutePath
+                logDir = engineDir.absolutePath,
+                fragmentTls = options.fragmentTls,
+                keepAlive = options.keepAlive
             )
             configFile = File(engineDir, "probe-config-mine.json")
             configFile!!.writeText(json)

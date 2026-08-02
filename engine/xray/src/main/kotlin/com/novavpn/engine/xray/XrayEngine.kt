@@ -107,6 +107,12 @@ class XrayEngine @Inject constructor(
     /** Whether Patterniha-style TLS fragmentation should be applied to the proxy dial. */
     private var tlsFragmentEnabled = false
 
+    /** Whether client-side TCP keepalive should be emitted on outbounds. */
+    private var keepAliveEnabled = true
+
+    /** Whether the DNS module should answer from the fake-IP pool (FakeDNS). */
+    private var fakeDnsEnabled = false
+
     /**
      * Enable/disable QUIC blocking. Must be set before [start]; the value is
      * baked into the generated config.json.
@@ -118,10 +124,27 @@ class XrayEngine @Inject constructor(
     /**
      * Enable/disable TLS fragmentation (fragment-out dialerProxy + random
      * fingerprint + custom cipher suites). Must be set before [start]; the
-     * value is baked into the generated config.json.
+     * value is baked into the generated config.json. Only TLS-over-TCP
+     * outbounds are affected (Reality/QUIC are never fragmented).
      */
     fun setTlsFragment(enabled: Boolean) {
         tlsFragmentEnabled = enabled
+    }
+
+    /**
+     * Enable/disable client-side TCP keepalive sockopt on outbounds.
+     * Must be set before [start]; baked into the generated config.json.
+     */
+    fun setKeepAlive(enabled: Boolean) {
+        keepAliveEnabled = enabled
+    }
+
+    /**
+     * Enable/disable FakeDNS (fake-IP pool) in the DNS module. Must be set
+     * before [start]; baked into the generated config.json.
+     */
+    fun setFakeDns(enabled: Boolean) {
+        fakeDnsEnabled = enabled
     }
 
     /** Job that reads the engine's stdout/stderr. */
@@ -201,7 +224,9 @@ class XrayEngine @Inject constructor(
                     routes = routes,
                     logDir = engineDir.absolutePath,
                     blockQuic = blockQuicEnabled,
-                    fragmentTls = tlsFragmentEnabled
+                    fragmentTls = tlsFragmentEnabled,
+                    keepAlive = keepAliveEnabled,
+                    fakeDns = fakeDnsEnabled
                 )
 
                 // 3. Write to engine directory

@@ -105,6 +105,13 @@ fun SettingsScreen(
                 onCheckedChange = { viewModel.setTlsFragment(it) }
             )
 
+            SettingsSwitchItem(
+                title = "TCP Keep-Alive",
+                subtitle = "Prevent idle connections from being dropped by middleboxes",
+                checked = settings.enableTcpKeepAlive,
+                onCheckedChange = { viewModel.setTcpKeepAlive(it) }
+            )
+
             Divider(modifier = Modifier.padding(vertical = 4.dp))
 
             // Privacy section
@@ -174,7 +181,7 @@ fun SettingsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "NovaVPN v1.0.0",
+                    text = "NovaVPN v${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

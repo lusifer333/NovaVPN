@@ -64,6 +64,11 @@ object XrayConfigParser {
         "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:" +
         "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
 
+    // RFC 5737-style private range used by the fake-IP pool (same pool
+    // sing-box and v2rayN use); routed to the proxy, remapped to real
+    // domains by xray's fakeip machinery.
+    private const val FAKE_IP_POOL = "198.18.0.0/15"
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -82,14 +87,16 @@ object XrayConfigParser {
         routes: List<String> = listOf("0.0.0.0/0"),
         logDir: String? = null,
         blockQuic: Boolean = false,
-        fragmentTls: Boolean = false
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true,
+        fakeDns: Boolean = false
     ): String {
         val root = buildJsonObject {
             put("log", buildLogSection(logDir))
-            put("inbounds", buildInbounds(blockQuic))
-            put("outbounds", buildOutbounds(config, fragmentTls))
-            put("routing", buildRouting(blockQuic))
-            put("dns", buildDns(dnsServers))
+            put("inbounds", buildInbounds(blockQuic, fakeDns))
+            put("outbounds", buildOutbounds(config, fragmentTls, keepAlive, fakeDns))
+            put("routing", buildRouting(blockQuic, fakeDns))
+            put("dns", buildDns(dnsServers, fakeDns))
             put("policy", buildPolicy())
         }
         val jsonStr = Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
@@ -104,8 +111,8 @@ object XrayConfigParser {
     }
 
     /**
-     * Karing-style urltest harness config: ONE xray instance that tests
-     * every candidate server in parallel.
+     * Karing-style urltest harness config: bounded engine sessions that
+     * test chunked candidate lists (see [MineFiller.CHUNK_SIZE]).
      *
      * Each candidate gets its own SOCKS5 inbound (`basePort + index`) whose
      * routing rule pins it to that server's outbound — so the mine filler
@@ -118,11 +125,18 @@ object XrayConfigParser {
      *   `probe-out-<i>`) and one socks inbound (tag `probe-in-<i>`).
      * @param basePort first probe inbound port; port i sits at basePort + i.
      * @param logDir when non-null, xray writes debug access/error logs there.
+     * @param fragmentTls apply Patterniha TLS fragmentation to eligible
+     *   (TLS-over-TCP) probe outbounds — same rule as the real config:
+     *   Reality and QUIC are never fragmented.
+     * @param keepAlive emit client-side TCP keepalive sockopt on probe
+     *   outbounds (matches the engine default).
      */
     fun buildMineConfig(
         servers: List<ServerConfig>,
         basePort: Int,
-        logDir: String? = null
+        logDir: String? = null,
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true
     ): String {
         val root = buildJsonObject {
             put("log", buildLogSection(logDir))
@@ -141,8 +155,11 @@ object XrayConfigParser {
                 }
             })
             put("outbounds", buildJsonArray {
+                if (servers.any { fragmentEligible(it, fragmentTls) }) {
+                    add(buildFragmentOutbound())
+                }
                 servers.forEachIndexed { i, server ->
-                    add(buildProxyOutbound(server, fragmentTls = false, tag = "probe-out-$i"))
+                    add(buildProxyOutbound(server, fragmentTls, keepAlive, tag = "probe-out-$i"))
                 }
                 add(buildDirectOutbound())
                 add(buildBlockOutbound())
@@ -201,7 +218,7 @@ object XrayConfigParser {
      * SOCKS5 and HTTP inbounds are kept for debugging: if Xray doesn't work,
      * users can test with a local proxy client at 127.0.0.1:10808/10809.
      */
-    private fun buildInbounds(blockQuic: Boolean = false): JsonArray = buildJsonArray {
+    private fun buildInbounds(blockQuic: Boolean = false, fakeDns: Boolean = false): JsonArray = buildJsonArray {
         // SOCKS5 inbound for VPN traffic forwarding
         add(buildJsonObject {
             put("listen", JsonPrimitive("127.0.0.1"))
@@ -212,10 +229,12 @@ object XrayConfigParser {
                 put("udp", JsonPrimitive(true))
             })
             put("tag", JsonPrimitive("socks-in"))
-            if (blockQuic) {
+            if (blockQuic || fakeDns) {
                 // Detect QUIC (UDP 443) so the routing rule can drop it:
                 // browsers then fall back to TCP and dodge DPI tampering.
-                put("sniffing", buildSniffing())
+                // FakeDNS needs sniffing too: fake-IP connections are
+                // remapped to their real domains via the sniffed name.
+                put("sniffing", buildSniffing(includeQuic = blockQuic))
             }
         })
         // HTTP proxy fallback
@@ -225,22 +244,24 @@ object XrayConfigParser {
             put("protocol", JsonPrimitive("http"))
             put("settings", buildJsonObject { })
             put("tag", JsonPrimitive("http-in"))
-            if (blockQuic) {
-                put("sniffing", buildSniffing())
+            if (blockQuic || fakeDns) {
+                put("sniffing", buildSniffing(includeQuic = blockQuic))
             }
         })
     }
 
     /**
-     * Sniffing config: http + tls for normal traffic, quic for detecting
-     * HTTP/3 handshakes. Only enabled when the "Block QUIC" toggle is on.
+     * Sniffing config: http + tls always (fake-IP remap depends on the
+     * recovered domain), quic only when the "Block QUIC" toggle is on.
      */
-    private fun buildSniffing(): JsonObject = buildJsonObject {
+    private fun buildSniffing(includeQuic: Boolean = false): JsonObject = buildJsonObject {
         put("enabled", JsonPrimitive(true))
         put("destOverride", buildJsonArray {
             add(JsonPrimitive("http"))
             add(JsonPrimitive("tls"))
-            add(JsonPrimitive("quic"))
+            if (includeQuic) {
+                add(JsonPrimitive("quic"))
+            }
         })
     }
 
@@ -250,15 +271,29 @@ object XrayConfigParser {
 
     /**
      * Builds the full outbounds array:
-     * 0. Proxy outbound (built from [config])
-     * 1. Direct (freedom) outbound — fallback for non-proxied traffic
-     * 2. Block outbound — drops traffic that should be blocked
+     * 0. Fragment-out (freedom) — ONLY when TLS fragmentation applies to
+     *    this server (TLS over a TCP transport; Reality and QUIC are
+     *    never fragmented — a fragmented Reality ClientHello breaks the
+     *    server's auth, and fragmentation is TCP-only so QUIC would die)
+     * 1. Proxy outbound (built from [config])
+     * 2. dns-out — the built-in DNS module as an outbound, so FakeDNS
+     *    routing can answer app DNS queries locally (fake-IP pool)
+     * 3. Direct (freedom) outbound — fallback for non-proxied traffic
+     * 4. Block outbound — drops traffic that should be blocked
      */
-    private fun buildOutbounds(config: ServerConfig, fragmentTls: Boolean = false): JsonArray = buildJsonArray {
-        if (fragmentTls) {
+    private fun buildOutbounds(
+        config: ServerConfig,
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true,
+        fakeDns: Boolean = false
+    ): JsonArray = buildJsonArray {
+        if (fragmentEligible(config, fragmentTls)) {
             add(buildFragmentOutbound())
         }
-        add(buildProxyOutbound(config, fragmentTls))
+        add(buildProxyOutbound(config, fragmentTls, keepAlive))
+        if (fakeDns) {
+            add(buildDnsOutbound())
+        }
         add(buildDirectOutbound())
         add(buildBlockOutbound())
     }
@@ -267,24 +302,29 @@ object XrayConfigParser {
      * Build the main proxy outbound from the server configuration.
      * Dispatches to protocol-specific builders.
      */
-    private fun buildProxyOutbound(config: ServerConfig, fragmentTls: Boolean = false, tag: String = "proxy"): JsonObject = buildJsonObject {
+    private fun buildProxyOutbound(
+        config: ServerConfig,
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true,
+        tag: String = "proxy"
+    ): JsonObject = buildJsonObject {
         put("tag", JsonPrimitive(tag))
 
         when (config.protocol) {
             Protocol.VMess -> {
                 put("protocol", JsonPrimitive("vmess"))
                 put("settings", buildVmessSettings(config))
-                put("streamSettings", buildStreamSettings(config, fragmentTls))
+                put("streamSettings", buildStreamSettings(config, fragmentTls, keepAlive))
             }
             Protocol.VLESS -> {
                 put("protocol", JsonPrimitive("vless"))
                 put("settings", buildVlessSettings(config))
-                put("streamSettings", buildStreamSettings(config, fragmentTls))
+                put("streamSettings", buildStreamSettings(config, fragmentTls, keepAlive))
             }
             Protocol.Trojan -> {
                 put("protocol", JsonPrimitive("trojan"))
                 put("settings", buildTrojanSettings(config))
-                put("streamSettings", buildStreamSettings(config, fragmentTls))
+                put("streamSettings", buildStreamSettings(config, fragmentTls, keepAlive))
             }
             Protocol.Shadowsocks -> {
                 put("protocol", JsonPrimitive("shadowsocks"))
@@ -293,12 +333,12 @@ object XrayConfigParser {
             Protocol.SOCKS5 -> {
                 put("protocol", JsonPrimitive("socks"))
                 put("settings", buildSocksSettings(config))
-                put("streamSettings", buildStreamSettings(config, fragmentTls))
+                put("streamSettings", buildStreamSettings(config, fragmentTls, keepAlive))
             }
             Protocol.HTTP -> {
                 put("protocol", JsonPrimitive("http"))
                 put("settings", buildHttpSettings(config))
-                put("streamSettings", buildStreamSettings(config, fragmentTls))
+                put("streamSettings", buildStreamSettings(config, fragmentTls, keepAlive))
             }
             Protocol.Unknown -> {
                 put("protocol", JsonPrimitive("freedom"))
@@ -539,11 +579,25 @@ object XrayConfigParser {
     // ------------------------------------------------------------------
 
     /**
+     * Whether Patterniha TLS fragmentation applies to [config]:
+     * ONLY plain TLS over a TCP transport. Reality must keep its real
+     * ClientHello (fragmenting it breaks the server's auth handshake) and
+     * QUIC is UDP — freedom's fragment dialer is TCP-only, so wiring it
+     * into a QUIC outbound kills the stream instantly.
+     */
+    private fun fragmentEligible(config: ServerConfig, fragmentTls: Boolean): Boolean =
+        fragmentTls && config.security == Security.TLS && config.transport != Transport.QUIC
+
+    /**
      * Build the `streamSettings` block based on the config's transport and
      * security fields. Reality is a transport-level security layer (part of
      * streamSettings), while TLS is indicated by setting the security field.
      */
-    private fun buildStreamSettings(config: ServerConfig, fragmentTls: Boolean = false): JsonObject = buildJsonObject {
+    private fun buildStreamSettings(
+        config: ServerConfig,
+        fragmentTls: Boolean = false,
+        keepAlive: Boolean = true
+    ): JsonObject = buildJsonObject {
         // Network (transport protocol)
         val network = when (config.transport) {
             Transport.TCP -> "tcp"
@@ -557,10 +611,11 @@ object XrayConfigParser {
         put("network", JsonPrimitive(network))
 
         // Security layer
+        val fragment = fragmentEligible(config, fragmentTls)
         when (config.security) {
             Security.TLS -> {
                 put("security", JsonPrimitive("tls"))
-                put("tlsSettings", buildTlsSettings(config, fragmentTls))
+                put("tlsSettings", buildTlsSettings(config, fragment))
             }
             Security.Reality -> {
                 put("security", JsonPrimitive("reality"))
@@ -588,11 +643,13 @@ object XrayConfigParser {
         // Cloudflare idle-drops from silently killing WS sessions (the
         // recurring "websocket: close 1005 (no status)" churn on dead UDP
         // associations). Validated against the real Xray 26.3.27 binary
-        // (xray -test -> Configuration OK).
+        // (xray -test -> Configuration OK). User-toggleable via settings.
         put("sockopt", buildJsonObject {
-            put("tcpKeepAliveIdle", JsonPrimitive(60))
-            put("tcpKeepAliveInterval", JsonPrimitive(15))
-            if (fragmentTls) {
+            if (keepAlive) {
+                put("tcpKeepAliveIdle", JsonPrimitive(60))
+                put("tcpKeepAliveInterval", JsonPrimitive(15))
+            }
+            if (fragment) {
                 // Patterniha TLS fragmentation: route the proxy dial through
                 // the fragment-out freedom outbound so the TLS ClientHello is
                 // split into small pieces (5-94 B, ~1 ms apart) that DPI can't
@@ -790,9 +847,17 @@ object XrayConfigParser {
      * SOCKS/HTTP inbounds (fallback) also route to proxy for testing.
      * DNS traffic on port 53 is explicitly routed to proxy to prevent
      * DNS_PROBE_POSSIBLE errors.
+     *
+     * With FakeDNS enabled, port-53 queries are answered LOCALLY by the
+     * built-in DNS module (fake-IP pool, 198.18.0.0/15): apps get fake
+     * IPs, connect to them, and xray remaps the connection to the real
+     * domain via sniffing. The fake-IP range is routed to the proxy.
      */
-    private fun buildRouting(blockQuic: Boolean = false): JsonObject = buildJsonObject {
-        put("domainStrategy", JsonPrimitive("AsIs"))
+    private fun buildRouting(blockQuic: Boolean = false, fakeDns: Boolean = false): JsonObject = buildJsonObject {
+        // IPIfNonMatch: with fake-IP addresses in play, try the domain
+        // rules first; only fall back to IP matching when the destination
+        // has no known domain (the fake-IP pool rule below).
+        put("domainStrategy", JsonPrimitive(if (fakeDns) "IPIfNonMatch" else "AsIs"))
         put("rules", buildJsonArray {
             if (blockQuic) {
                 // MUST be first: Xray matches rules top-down, and the
@@ -806,12 +871,25 @@ object XrayConfigParser {
                     put("outboundTag", JsonPrimitive("block"))
                 })
             }
-            // Route DNS traffic through proxy
+            // Route DNS traffic through proxy — or, with FakeDNS, into the
+            // local DNS module so it answers from the fake-IP pool.
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
                 put("port", JsonPrimitive("53"))
-                put("outboundTag", JsonPrimitive("proxy"))
+                put("outboundTag", JsonPrimitive(if (fakeDns) "dns-out" else "proxy"))
             })
+            if (fakeDns) {
+                // Fake-IP pool (198.18.0.0/15) must reach the proxy; xray
+                // remaps each fake-IP connection back to its real domain
+                // (sniffed from the payload) before dialing the outbound.
+                add(buildJsonObject {
+                    put("type", JsonPrimitive("field"))
+                    put("ip", buildJsonArray {
+                        add(JsonPrimitive(FAKE_IP_POOL))
+                    })
+                    put("outboundTag", JsonPrimitive("proxy"))
+                })
+            }
             // Route all SOCKS/HTTP inbound traffic through proxy
             add(buildJsonObject {
                 put("type", JsonPrimitive("field"))
@@ -847,10 +925,30 @@ object XrayConfigParser {
     // DNS
     // ------------------------------------------------------------------
 
-    private fun buildDns(dnsServers: List<String>): JsonObject = buildJsonObject {
+    private fun buildDns(dnsServers: List<String>, fakeDns: Boolean = false): JsonObject = buildJsonObject {
         put("servers", buildJsonArray {
             dnsServers.forEach { add(JsonPrimitive(it)) }
         })
+        if (fakeDns) {
+            // Fake-IP (fakeip) pool: xray answers A/AAAA queries with
+            // addresses from 198.18.0.0/15, remembers domain→fake-IP, and
+            // remaps connections to fake IPs back to the real domain.
+            put("queryStrategy", JsonPrimitive("UseIP"))
+            put("fakeip", buildJsonObject {
+                put("enabled", JsonPrimitive(true))
+                put("ip4", JsonPrimitive(FAKE_IP_POOL))
+            })
+        }
+    }
+
+    /**
+     * The built-in DNS module exposed as an outbound (protocol "dns").
+     * FakeDNS routing sends port-53 queries here so they are answered
+     * LOCALLY from the fake-IP pool instead of leaking through the proxy.
+     */
+    private fun buildDnsOutbound(): JsonObject = buildJsonObject {
+        put("protocol", JsonPrimitive("dns"))
+        put("tag", JsonPrimitive("dns-out"))
     }
 
     // ------------------------------------------------------------------

@@ -74,6 +74,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setTcpKeepAlive(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update(_state.value.settings.copy(enableTcpKeepAlive = enabled))
+        }
+    }
+
     fun setPerAppVpn(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.update(_state.value.settings.copy(enablePerAppVpn = enabled))

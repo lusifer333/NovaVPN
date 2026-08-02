@@ -13,6 +13,19 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // Sunk with the release version the user actually receives: CI
+        // passes -PversionName (see .github/workflows), so the version shown
+        // on the Settings screen always matches the tagged release instead
+        // of a hardcoded placeholder.
+        buildConfigField(
+            "String",
+            "VERSION_NAME",
+            "\"${project.findProperty("versionName") ?: "1.0.0"}\""
+        )
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

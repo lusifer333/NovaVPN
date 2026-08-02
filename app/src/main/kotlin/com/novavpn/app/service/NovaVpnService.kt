@@ -306,9 +306,12 @@ class NovaVpnService : VpnService() {
         val appSettings = settingsRepository.get()
         (engine as? XrayEngine)?.setBlockQuic(appSettings.enableBlockQuic)
         (engine as? XrayEngine)?.setTlsFragment(appSettings.enableTlsFragment)
+        (engine as? XrayEngine)?.setKeepAlive(appSettings.enableTcpKeepAlive)
+        (engine as? XrayEngine)?.setFakeDns(appSettings.enableFakeDns)
         Timber.tag(TAG).i(
-            "LIFECYCLE: ENGINE_START blockQuic=%b fragmentTls=%b",
-            appSettings.enableBlockQuic, appSettings.enableTlsFragment
+            "LIFECYCLE: ENGINE_START blockQuic=%b fragmentTls=%b keepAlive=%b fakeDns=%b",
+            appSettings.enableBlockQuic, appSettings.enableTlsFragment,
+            appSettings.enableTcpKeepAlive, appSettings.enableFakeDns
         )
         engine.start(cfg).onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)

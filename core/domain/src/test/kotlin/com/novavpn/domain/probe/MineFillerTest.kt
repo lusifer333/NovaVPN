@@ -2,10 +2,15 @@ package com.novavpn.domain.probe
 
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
+import io.mockk.capture
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.eq
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -16,13 +21,10 @@ class MineFillerTest {
     private fun server(id: String): ServerConfig =
         ServerConfig(id = id, name = id, address = "127.0.0.1", port = 1)
 
-    private fun result(id: String, ok: Boolean, ms: Long? = if (ok) 120L else null): ServerProbeResult =
-        ServerProbeResult(serverId = id, e2eOk = ok, e2eMs = ms)
-
     /** Karing urltest prober whose session always starts; verdict per server id. */
     private fun e2eOf(okIds: Set<String>): RealDelayProber {
         val p = mockk<RealDelayProber>()
-        coEvery { p.start(any()) } returns true
+        coEvery { p.start(any(), any()) } returns true
         coEvery { p.probe(any()) } answers {
             val id = firstArg<String>()
             if (id in okIds) RealDelayOutcome(true, 120) else RealDelayOutcome(false)
@@ -62,7 +64,8 @@ class MineFillerTest {
 
     @Test
     fun `fill stops the moment the mine is full`() {
-        // 4 servers, capacity = clamp(ceil(4*0.3),3,12) = 3 → after 3 healthy, the 4th must NOT be probed
+        // 4 servers, capacity = clamp(ceil(4*0.20),3,12) = 3 → after 3 healthy,
+        // the 4th must NOT be probed.
         val filler = MineFiller(e2eOf(okIds = setOf("a", "b", "c", "d")))
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b"), server("c"), server("d")))))
@@ -73,8 +76,8 @@ class MineFillerTest {
 
     @Test
     fun `profile shares are respected - large profile cannot starve small one`() {
-        // A=5 servers (share 1), B=50 servers (share 11), capacity 12
-        // B's servers come first in the list but A must get its slot
+        // A=5 servers (share 1), B=50 servers, capacity = clamp(ceil(55*0.20),3,12) = 11
+        // B's servers come first in the list but A must get its slot.
         val bServers = (0 until 50).map { server("b$it") }
         val aServers = (0 until 5).map { server("a$it") }
         val allIds = bServers.map { it.id } + aServers.map { it.id }
@@ -86,7 +89,7 @@ class MineFillerTest {
                     ProfileServers("A", "A", aServers)
                 )
             )
-            assertEquals(12, r.mine.size)
+            assertEquals(11, r.mine.size)
             // A has 5 servers and share 1 → exactly one of a* in the mine
             val aInMine = r.mine.count { it.id.startsWith("a") }
             assertEquals(1, aInMine)
@@ -107,7 +110,7 @@ class MineFillerTest {
     @Test
     fun `mine is sorted by real delay ascending`() {
         val e2e = mockk<RealDelayProber>()
-        coEvery { e2e.start(any()) } returns true
+        coEvery { e2e.start(any(), any()) } returns true
         coEvery { e2e.probe(any()) } coAnswers {
             val id = firstArg<String>()
             if (id == "s5") {
@@ -146,7 +149,7 @@ class MineFillerTest {
         // The shared Karing-style session could not boot → no server can
         // be tested, and the mine must stay empty.
         val e2e = mockk<RealDelayProber>()
-        coEvery { e2e.start(any()) } returns false
+        coEvery { e2e.start(any(), any()) } returns false
         coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
         coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
@@ -165,7 +168,76 @@ class MineFillerTest {
         runBlocking {
             filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
         }
-        coVerify(exactly = 1) { e2e.start(any()) }
+        coVerify(exactly = 1) { e2e.start(any(), any()) }
         coVerify(exactly = 1) { e2e.stop() }
+    }
+
+    @Test
+    fun `large catalog is filled through bounded engine sessions`() {
+        // 250 servers; healthy = every 17th id (0,17,..238 → 6 live in
+        // chunk 1, 6 in chunk 2). capacity = clamp(ceil(250*0.20),3,12) = 12.
+        // The fill must NOT emit one 250-outbound config: sessions stay
+        // ≤ CHUNK_SIZE and the mine fills across two sessions.
+        val healthy = (0 until 250 step 17).toSet()
+        val sessions = mutableListOf<List<ServerConfig>>()
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(capture(sessions), any()) } returns true
+        coEvery { e2e.probe(any()) } answers {
+            val id = firstArg<String>()
+            if (id.toInt() in healthyIds) RealDelayOutcome(true, 60) else RealDelayOutcome(false)
+        }
+        coEvery { e2e.stop() } returns Unit
+
+        val filler = MineFiller(e2e)
+        runBlocking {
+            val r = filler.fill(
+                listOf(ProfileServers("p1", "P1", (0 until 250).map { server("$it") })),
+                e2eParallelism = 8
+            )
+            assertEquals(12, r.mine.size)
+        }
+        // chunk 1 admits 6, chunk 2 admits 6 → mine full after session 2
+        assertEquals(2, sessions.size)
+        coVerify(exactly = sessions.size) { e2e.stop() }
+        assertTrue(
+            "every engine session must carry at most CHUNK_SIZE candidates",
+            sessions.all { it.size <= MineFiller.CHUNK_SIZE }
+        )
+    }
+
+    @Test
+    fun `probe options are forwarded to every engine session`() {
+        val options = ProbeOptions(fragmentTls = true, keepAlive = false)
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any(), any()) } returns true
+        coEvery { e2e.probe(any()) } returns RealDelayOutcome(true, 50)
+        coEvery { e2e.stop() } returns Unit
+        val filler = MineFiller(e2e)
+        runBlocking {
+            filler.fill(
+                listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b")))),
+                options = options
+            )
+        }
+        coVerify(exactly = 1) { e2e.start(any(), eq(options)) }
+    }
+
+    @Test
+    fun `cancellation mid-fill still tears down the engine session`() {
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any(), any()) } returns true
+        coEvery { e2e.probe(any()) } coAnswers {
+            delay(10_000)
+            RealDelayOutcome(true, 1)
+        }
+        coEvery { e2e.stop() } returns Unit
+        val filler = MineFiller(e2e)
+        val job = CoroutineScope(Dispatchers.Default).launch {
+            filler.fill(listOf(ProfileServers("p1", "P1", (0 until 20).map { server("s$it") })))
+        }
+        job.cancel()
+        job.join()
+        // stop is idempotent; per-chunk finally + the outer safety net
+        coVerify(atLeast = 1) { e2e.stop() }
     }
 }

@@ -74,28 +74,30 @@ class SubscriptionImporter @Inject constructor(
             }
         }
 
-        // Parse on current dispatcher
+        // Parse on CPU dispatcher: parser.parse can be heavy for huge
+        // subscriptions (a 2000-server base64 blob) and must never run on
+        // the caller's main thread.
         Timber.tag(TAG).d("importFromUrl: received %d chars", rawText.length)
         if (rawText.isBlank()) {
             Timber.tag(TAG).w("importFromUrl: empty response")
             return emptyList()
         }
 
-        val configs = parser.parse(rawText)
+        val configs = withContext(Dispatchers.Default) { parser.parse(rawText) }
         Timber.tag(TAG).d("importFromUrl: parsed %d configs", configs.size)
         return configs
     }
 
     suspend fun importFromClipboard(text: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromClipboard: %d chars", text.length)
-        val configs = parser.parse(text)
+        val configs = withContext(Dispatchers.Default) { parser.parse(text) }
         Timber.tag(TAG).d("importFromClipboard: parsed %d configs", configs.size)
         return configs
     }
 
     suspend fun importFromFile(content: String): List<ServerConfig> {
         Timber.tag(TAG).d("importFromFile: %d chars", content.length)
-        val configs = parser.parse(content)
+        val configs = withContext(Dispatchers.Default) { parser.parse(content) }
         Timber.tag(TAG).d("importFromFile: parsed %d configs", configs.size)
         return configs
     }

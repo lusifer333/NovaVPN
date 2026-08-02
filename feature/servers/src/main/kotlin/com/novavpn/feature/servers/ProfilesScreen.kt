@@ -81,17 +81,35 @@ fun ProfilesScreen(
                     }
                 }
             } else {
-                items(
-                    items = state.profiles,
-                    key = { it.subscription.id }
-                ) { profile ->
-                    ProfileCard(
-                        profile = profile,
-                        results = state.results,
-                        selectedServerId = state.selectedServerId,
-                        onToggle = { viewModel.toggleProfile(profile.subscription.id) },
-                        onSelect = viewModel::selectServer
-                    )
+                // Flattened lazy layout: each profile card is one item, and
+                // an expanded profile's configs are emitted as their own
+                // lazy rows. The old version rendered 2000+ rows in a single
+                // non-lazy Column inside one card item — it composed all of
+                // them at once and froze the UI on expand.
+                state.profiles.forEach { profile ->
+                    items(
+                        items = listOf(profile),
+                        key = { "profile-${it.subscription.id}" }
+                    ) { p ->
+                        ProfileCard(
+                            profile = p,
+                            onToggle = { viewModel.toggleProfile(p.subscription.id) }
+                        )
+                    }
+                    if (profile.isExpanded) {
+                        items(
+                            items = profile.servers,
+                            key = { "srv-${it.id}" }
+                        ) { server ->
+                            ServerListItem(
+                                server = server,
+                                isSelected = server.id == state.selectedServerId,
+                                probeResult = state.results[server.id],
+                                onTap = { viewModel.selectServer(server) },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -179,10 +197,7 @@ private fun MineSection(
 @Composable
 private fun ProfileCard(
     profile: ProfileUi,
-    results: Map<String, com.novavpn.domain.model.ServerProbeResult>,
-    selectedServerId: String?,
-    onToggle: () -> Unit,
-    onSelect: (ServerConfig) -> Unit
+    onToggle: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -214,20 +229,6 @@ private fun ProfileCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            }
-            if (profile.isExpanded) {
-                HorizontalDivider()
-                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                    profile.servers.forEach { server ->
-                        ServerListItem(
-                            server = server,
-                            isSelected = server.id == selectedServerId,
-                            probeResult = results[server.id],
-                            onTap = { onSelect(server) },
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
-                    }
                 }
             }
         }

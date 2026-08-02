@@ -7,7 +7,7 @@ import kotlin.math.roundToInt
  * Mine (معدن) capacity model — the curated reservoir of healthy servers.
  *
  * - Total capacity scales with the number of servers across all profiles:
- *   `clamp(ceil(total × 0.30), 3, 12)`.
+ *   `clamp(ceil(total × 0.20), 3, 12)`.
  * - Each profile receives a proportional share of the capacity
  *   (`max(1, round(capacity × profileServers / total))`), so one huge
  *   subscription cannot starve the others. A share never exceeds the
@@ -19,7 +19,12 @@ object MineCapacity {
 
     const val MIN_CAPACITY = 3
     const val MAX_CAPACITY = 12
-    private const val TARGET_RATIO = 0.30
+
+    /**
+     * Target mine capacity ratio: 20% of the catalog (user-requested —
+     * 30% produced oversized mines that diluted quality).
+     */
+    const val TARGET_RATIO: Double = 0.20
 
     /** Total mine capacity for [totalServers] servers across all profiles. */
     fun capacityOf(totalServers: Int): Int {
