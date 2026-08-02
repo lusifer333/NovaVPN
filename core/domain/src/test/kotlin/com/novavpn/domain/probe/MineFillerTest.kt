@@ -5,7 +5,9 @@ import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
