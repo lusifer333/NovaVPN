@@ -6,6 +6,7 @@ import com.novavpn.domain.model.ServerProbeResult
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -138,16 +139,21 @@ class MineFillerTest {
             green(firstArg<ServerConfig>().id)
         }
         val e2e = mockk<RealDelayProber>()
-        coEvery { e2e.probe(any()) } answers {
+        coEvery { e2e.probe(any()) } coAnswers {
             val id = firstArg<ServerConfig>().id
-            RealDelayOutcome(true, id.removePrefix("s").toLong())
+            val ms = id.removePrefix("s").toLong()
+            delay(ms) // completion order == delay order
+            RealDelayOutcome(true, ms)
         }
         val filler = MineFiller(prober, e2e)
         runBlocking {
             val r = filler.fill(
                 listOf(ProfileServers("p1", "P1", listOf(server("s5"), server("s1"), server("s3"), server("s2")))),
-                probeParallelism = 100
+                probeParallelism = 100,
+                e2eParallelism = 3
             )
+            // Wave admits in completion order and stops at capacity 3 —
+            // the slowest relay (s5) is cancelled, the fastest 3 win.
             assertEquals(listOf("s1", "s2", "s3"), r.mine.map { it.id })
         }
     }

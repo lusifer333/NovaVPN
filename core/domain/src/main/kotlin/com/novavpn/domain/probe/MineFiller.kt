@@ -3,8 +3,11 @@ package com.novavpn.domain.probe
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.onAwait
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -136,8 +139,10 @@ class MineFiller(
 
     /**
      * Runs real-delay probes for the batch's greens as a bounded wave.
-     * Returns true when this profile's share (or the whole mine) filled —
-     * the caller then moves to the next profile / stops.
+     * Results are consumed in COMPLETION order (fastest relay first), so
+     * the mine fills best-first while the wave still runs; early-stop is
+     * preserved. Returns true when this profile's share (or the whole
+     * mine) filled — the caller then moves to the next profile / stops.
      */
     private suspend fun e2eWave(
         greens: List<Pair<ServerConfig, ServerProbeResult>>,
@@ -158,11 +163,17 @@ class MineFiller(
                 server to base.copy(e2eOk = outcome.ok, e2eMs = outcome.e2eMs)
             }
         }
+        val remaining = deferreds.toMutableList()
         var filled = false
         try {
-            for (d in deferreds) {
+            while (remaining.isNotEmpty()) {
                 if (mine.size >= capacity) break
-                val (server, merged) = d.await()
+                val (deferred, pair) =
+                    select<Pair<Deferred<Pair<ServerConfig, ServerProbeResult>>, Pair<ServerConfig, ServerProbeResult>>> {
+                        remaining.forEach { d -> d.onAwait { d to it } }
+                    }
+                remaining.remove(deferred)
+                val (server, merged) = pair
                 results[server.id] = merged
                 onResult(merged)
                 if (!merged.e2eOk) continue
@@ -177,7 +188,7 @@ class MineFiller(
         } catch (e: CancellationException) {
             throw e
         } finally {
-            deferreds.forEach { if (!it.isCompleted) it.cancel() }
+            remaining.forEach { if (!it.isCompleted) it.cancel() }
         }
         filled
     }

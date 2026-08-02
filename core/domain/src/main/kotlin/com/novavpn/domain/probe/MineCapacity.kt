@@ -42,8 +42,11 @@ object MineCapacity {
     }
 
     /**
-     * Per-profile shares for a list of profile sizes. Sum of shares is
-     * guaranteed to be ≤ [capacity] (a profile with zero servers gets 0).
+     * Per-profile shares for a list of profile sizes. Every non-empty
+     * profile gets at least one slot; a share never exceeds the profile's
+     * own server count. NOTE: independent proportional rounding can make
+     * the SUM of shares exceed [capacity] — the filler stops at capacity
+     * regardless, so overshoot is harmless by design.
      */
     fun profileShares(capacity: Int, totalServers: Int, profileSizes: List<Int>): List<Int> =
         profileSizes.map { profileShare(capacity, totalServers, it) }

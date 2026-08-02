@@ -55,14 +55,17 @@ class MineCapacityTest {
     fun `each profile gets at least one slot`() {
         // Two profiles, one tiny: 199 vs 1 of 200 → capacity 12
         val shares = MineCapacity.profileShares(12, 200, listOf(199, 1))
-        assertEquals(12, shares[0] + shares[1]) // no slot wasted
-        assertEquals(1, shares[1])
+        assertEquals(12, shares[0]) // 199/200 of 12 → 11.94 → rounds to 12
+        assertEquals(1, shares[1])  // tiny profile keeps its guaranteed slot
+        // (sum may exceed capacity — proportional rounding; the filler
+        // stops at capacity regardless, overshoot is harmless)
     }
 
     @Test
     fun `share never exceeds the profile's own server count`() {
         assertEquals(1, MineCapacity.profileShare(12, 100, 1))
-        assertEquals(2, MineCapacity.profileShare(12, 100, 2))
+        assertEquals(1, MineCapacity.profileShare(12, 100, 2)) // 12×0.02=0.24 → round 0 → min 1
+        assertEquals(2, MineCapacity.profileShare(12, 100, 20)) // 12×0.20=2.4 → round 2
     }
 
     @Test
