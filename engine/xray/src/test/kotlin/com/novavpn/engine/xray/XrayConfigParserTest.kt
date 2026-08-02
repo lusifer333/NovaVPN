@@ -300,7 +300,7 @@ class XrayConfigParserTest {
 
     @Test
     fun `fragmentTls injects fragment-out freedom outbound with tlshello fragment`() {
-        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""", fragmentTls = true)
+        val root = gen(Protocol.VLESS, """{"id":"x","encryption":"none"}""", fragmentTls = true, security = Security.TLS)
 
         val outbounds = root["outbounds"]!!.jsonArray!!
         val fragment = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "fragment-out" }.jsonObject
@@ -446,7 +446,8 @@ class XrayConfigParserTest {
         blockQuic: Boolean = false,
         fragmentTls: Boolean = false,
         keepAlive: Boolean = true,
-        fakeDns: Boolean = false
+        fakeDns: Boolean = false,
+        security: Security? = null
     ): JsonObject {
         val config = ServerConfig(
             name = "Test",
@@ -454,7 +455,7 @@ class XrayConfigParserTest {
             port = 443,
             protocol = proto,
             transport = Transport.TCP,
-            security = if (proto == Protocol.Trojan) Security.TLS else Security.None,
+            security = security ?: if (proto == Protocol.Trojan) Security.TLS else Security.None,
             rawConfig = rawConfig,
             engineFormat = EngineFormat.XrayJson
         )
