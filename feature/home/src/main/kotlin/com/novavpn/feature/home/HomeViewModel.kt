@@ -171,7 +171,7 @@ class HomeViewModel @Inject constructor(
             fragmentTls = settings.enableTlsFragment,
             keepAlive = settings.enableTcpKeepAlive
         )
-        val result = fillMineUseCase(profiles, options, previousMine = mineRepository.get().getOrElse { emptyList() })
+        val result = fillMineUseCase(profiles, options, previousMine = mineRepository.get())
         return result.mine.firstOrNull()
     }
 
