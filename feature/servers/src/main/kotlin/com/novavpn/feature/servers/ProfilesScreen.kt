@@ -52,7 +52,8 @@ fun ProfilesScreen(
                     state = state,
                     onFillMine = viewModel::fillMine,
                     onStopFill = viewModel::stopFill,
-                    onSelect = viewModel::selectServer
+                    onSelect = viewModel::selectServer,
+                    onProbe = viewModel::probeServer
                 )
             }
 
@@ -107,6 +108,7 @@ fun ProfilesScreen(
                                 isSelected = server.id == state.selectedServerId,
                                 probeResult = state.results[server.id],
                                 onTap = { viewModel.selectServer(server) },
+                                onProbe = { viewModel.probeServer(server) },
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -123,7 +125,8 @@ private fun MineSection(
     state: ProfilesUiState,
     onFillMine: () -> Unit,
     onStopFill: () -> Unit,
-    onSelect: (ServerConfig) -> Unit
+    onSelect: (ServerConfig) -> Unit,
+    onProbe: (ServerConfig) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -192,6 +195,7 @@ private fun MineSection(
                         isSelected = server.id == state.selectedServerId,
                         probeResult = state.results[server.id],
                         onTap = { onSelect(server) },
+                        onProbe = { onProbe(server) },
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }

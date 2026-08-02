@@ -134,6 +134,7 @@ fun ServerListItem(
     isHealthy: Boolean? = null,
     probeResult: ServerProbeResult? = null,
     onTap: () -> Unit,
+    onProbe: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -199,7 +200,7 @@ fun ServerListItem(
             }
             Spacer(Modifier.width(8.dp))
 
-            // Latency + health
+            // Latency + health, then per-server probe button.
             Column(horizontalAlignment = Alignment.End) {
                 if (latencyMs != null && latencyMs >= 0) {
                     Text(
@@ -209,41 +210,35 @@ fun ServerListItem(
                     )
                 }
                 HealthIndicator(isHealthy = isHealthy)
+                if (onProbe != null) {
+                    Spacer(Modifier.height(6.dp))
+                    // Per-server ping button: shows the pong ('Untested' until
+                    // probed, then the delay) and re-probes this ONE server.
+                    TextButton(
+                        onClick = onProbe,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text(
+                            text = when {
+                                probeResult != null && probeResult.e2eMs != null -> {
+                                    if (probeResult.e2eOk) "🚀 ${probeResult.e2eMs}ms" else "🚀 ✗"
+                                }
+                                probeResult != null -> "🚀 ✗"
+                                else -> "Untested"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when {
+                                probeResult == null -> StatusUntested
+                                probeResult.e2eOk -> StatusHealthy
+                                else -> StatusUnhealthy
+                            }
+                        )
+                    }
+                }
             }
-        }
 
-        // Single Karing-style urltest badge: 🚀 real HTTP round-trip
-        // delay. One test + one ping — the server either relays traffic
-        // (204) or it doesn't.
-        if (probeResult != null) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ProbeBadge(
-                    text = probeResult.e2eMs?.let { "🚀 ${it}ms" } ?: "🚀 ✗",
-                    color = if (probeResult.e2eOk) StatusHealthy else StatusUnhealthy
-                )
-            }
         }
-        }
-    }
-}
-
-/** Small colored badge for a probe stage result. */
-@Composable
-private fun ProbeBadge(text: String, color: Color) {
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        color = color.copy(alpha = 0.12f)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-        )
     }
 }
 

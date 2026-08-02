@@ -9,11 +9,16 @@ import com.novavpn.domain.model.Subscription
 import com.novavpn.domain.probe.MineCapacity
 import com.novavpn.domain.probe.ProfileServers
 import com.novavpn.domain.probe.ProbeOptions
+import com.novavpn.domain.probe.RealDelayOutcome
+import com.novavpn.domain.probe.RealDelayProber
 import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
+import com.novavpn.domain.usecase.connection.ConnectUseCase
+import com.novavpn.domain.usecase.connection.VpnServiceStarter
 import com.novavpn.domain.usecase.server.SelectServerUseCase
+import com.novavpn.domain.model.VpnState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -58,7 +63,10 @@ class ProfilesViewModel @Inject constructor(
     private val selectServerUseCase: SelectServerUseCase,
     private val settingsRepository: SettingsRepository,
     private val fillMineUseCase: FillMineUseCase,
-    private val mineRepository: MineRepository
+    private val mineRepository: MineRepository,
+    private val realDelayProber: RealDelayProber,
+    private val connectUseCase: ConnectUseCase,
+    private val vpnServiceStarter: VpnServiceStarter
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfilesUiState())
@@ -129,6 +137,66 @@ class ProfilesViewModel @Inject constructor(
         viewModelScope.launch {
             selectServerUseCase(server.id)
             _state.update { it.copy(selectedServerId = server.id) }
+            // Auto-switch: if the VPN is already active on another server,
+            // re-connect immediately — no manual off/on required.
+            val active = connectUseCase.connectionState.value
+            if (active is VpnState.Connected || active is VpnState.Connecting) {
+                vpnServiceStarter.startVpn(server)
+            }
+        }
+    }
+
+    /**
+     * Probe a single server on demand (the per-server ❌/🚀 button): boots a
+     * one-server engine session, runs one real-delay urltest ping, and writes
+     * the result into [ProfilesUiState.results] under [server]'s id. Also
+     * drops the server from the mine if the ping now fails, and re-adds it if
+     * it succeeds and wasn't already there.
+     */
+    fun probeServer(server: ServerConfig) {
+        if (_state.value.isFilling) return
+        viewModelScope.launch {
+            try {
+                val settings = settingsRepository.get()
+                val options = ProbeOptions(
+                    fragmentTls = settings.enableTlsFragment,
+                    keepAlive = settings.enableTcpKeepAlive
+                )
+                val started = realDelayProber.start(listOf(server), options)
+                val outcome = try {
+                    if (started) {
+                        realDelayProber.probe(server.id)
+                    } else {
+                        RealDelayOutcome(ok = false)
+                    }
+                } finally {
+                    realDelayProber.stop()
+                }
+                val result = ServerProbeResult(
+                    serverId = server.id,
+                    e2eOk = outcome.ok,
+                    e2eMs = outcome.e2eMs
+                )
+                _state.update { current ->
+                    val mineHas = current.mine.any { it.id == server.id }
+                    var mine = current.mine
+                    if (result.e2eOk) {
+                        // healthy: re-add (if it isn't already) or refresh its ping.
+                        if (!mineHas) mine = mine + server
+                    } else {
+                        // dead: drop from the mine.
+                        mine = mine.filterNot { it.id == server.id }
+                    }
+                    current.copy(
+                        results = current.results + (server.id to result),
+                        mine = mine
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // a single probe must never crash the VM / screen
+            }
         }
     }
 
@@ -159,7 +227,7 @@ class ProfilesViewModel @Inject constructor(
         }
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return
 
-        _state.update { it.copy(isFilling = true, mine = emptyList(), results = emptyMap()) }
+        _state.update { it.copy(isFilling = true, mine = emptyList()) }
         fillJob?.cancel()
         latestMine = null
         persistJob?.cancel()

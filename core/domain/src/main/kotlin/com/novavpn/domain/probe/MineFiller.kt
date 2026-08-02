@@ -60,9 +60,14 @@ class MineFiller(
      * @param options how each engine session is built (TLS fragment /
      *        TCP keepalive mirror the real connection settings so the
      *        probe verdict is honest).
-     * @param previousMine servers carried over from the last fill run
-     *        (orphans — servers no longer in any profile — are silently
-     *        dropped; the warm start is early-returned if already full).
+     * @param previousMine servers carried over from the last fill run.
+     *        The warm start seeds the mine with every previous server still
+     *        present in a profile (orphans dropped), THEN re-probes those
+     *        seeds — a seed that no longer relays is dropped from the mine
+     *        and its share freed — and finally fills any freed capacity with
+     *        the next-best healthy servers from the catalog. So every fill
+     *        (manual or auto-connect) refreshes the live pings; the mine is
+     *        never "trusted without re-testing".
      * @param onResult per-server outcome, emitted as soon as it completes.
      * @param onMine current mine contents, emitted on every change.
      */
@@ -84,32 +89,47 @@ class MineFiller(
         val filledByProfile = mutableMapOf<String, Int>()
         val semaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
 
-        // Warm-start: seed the mine from previous run (survives app restart).
-        // Orphans (no longer in any profile) are silently dropped.
+        // Warm-start seed: carry over every previous server still present in
+        // a profile (orphans gone). This seeds the mine immediately so the UI
+        // shows it — but seeds are NOT trusted; they are re-probed below by
+        // [refreshSeeds] and dropped if they no longer relay.
         val aliveIds = profiles.flatMap { it.servers.map { s -> s.id } }.toSet()
         val warmServers = previousMine.filter { it.id in aliveIds }
-        if (warmServers.isNotEmpty()) {
-            for (s in warmServers) {
-                if (mineIds.add(s.id)) {
-                    mine += s
-                    // Count into the first profile that owns this server.
-                    val ownerId = profiles.firstOrNull { it.servers.any { srv -> srv.id == s.id } }?.profileId
-                    if (ownerId != null) {
-                        filledByProfile[ownerId] = (filledByProfile[ownerId] ?: 0) + 1
-                    }
-                    onMine(mine.toList())
+        for (s in warmServers) {
+            if (mineIds.add(s.id)) {
+                mine += s
+                val ownerId = profiles.firstOrNull { it.servers.any { srv -> srv.id == s.id } }?.profileId
+                if (ownerId != null) {
+                    filledByProfile[ownerId] = (filledByProfile[ownerId] ?: 0) + 1
                 }
-            }
-            // Early-return if warm start already filled the mine.
-            if (mine.size >= capacity) {
-                val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
-                return MineFillResult(sorted, results)
+                onMine(mine.toList())
             }
         }
 
         try {
+            // Phase 1 — refresh the warm seeds: re-probe every one; a seed
+            // that failed is dropped (share freed) so phase 2 can refill.
+            if (warmServers.isNotEmpty()) {
+                refreshSeeds(
+                    seeds = warmServers,
+                    profiles = profiles,
+                    options = options,
+                    semaphore = semaphore,
+                    mine = mine,
+                    mineIds = mineIds,
+                    filledByProfile = filledByProfile,
+                    results = results,
+                    onResult = onResult,
+                    onMine = onMine
+                )
+            }
+
+            // Phase 2: fill freed / remaining capacity with best-healthy new
+            // servers from the catalog. Seeds are excluded (already probed in
+            // phase 1, and their ids sit in mineIds) so they are not re-fanned.
             profileLoop@ for (profile in profiles) {
-                if (profile.servers.isEmpty()) continue
+                val profileNew = profile.servers.filter { it.id !in mineIds }
+                if (profileNew.isEmpty()) continue
                 if (mine.size >= capacity) break
                 val share = MineCapacity.profileShare(
                     capacity = capacity,
@@ -122,7 +142,7 @@ class MineFiller(
                 // stays tiny (≤ CHUNK_SIZE outbounds) so Android's
                 // RLIMIT_NOFILE (~1024) is never exhausted, while the same
                 // shared wait + early-stop spans all of a profile's chunks.
-                for (chunk in profile.servers.chunked(CHUNK_SIZE)) {
+                for (chunk in profileNew.chunked(CHUNK_SIZE)) {
                     if (mine.size >= capacity) break@profileLoop
                     if ((filledByProfile[profile.profileId] ?: 0) >= share) continue@profileLoop
 
@@ -173,6 +193,91 @@ class MineFiller(
                 throw e
             } catch (_: Exception) {
                 // engine stop must never mask the fill result
+            }
+        }
+    }
+
+    /**
+     * Re-probe every warm seed. A seed that no longer relays (probe fails)
+     * is removed from the mine and its profile's share is freed, so phase 2
+     * can backfill the slot with a healthy server. Successful seeds keep
+     * their place and their ping is refreshed in [results].
+     */
+    private suspend fun refreshSeeds(
+        seeds: List<ServerConfig>,
+        profiles: List<ProfileServers>,
+        options: ProbeOptions,
+        semaphore: Semaphore,
+        mine: MutableList<ServerConfig>,
+        mineIds: MutableSet<String>,
+        filledByProfile: MutableMap<String, Int>,
+        results: MutableMap<String, ServerProbeResult>,
+        onResult: (ServerProbeResult) -> Unit,
+        onMine: (List<ServerConfig>) -> Unit
+    ) {
+        for (chunk in seeds.chunked(CHUNK_SIZE)) {
+            if (chunk.isEmpty()) continue
+            val engineUp = try {
+                realDelayProber.start(chunk, options)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            try {
+                // Probe each seed through the bounded wave.
+                coroutineScope {
+                    val deferreds = chunk.map { server ->
+                        async {
+                            val outcome = if (engineUp) {
+                                semaphore.withPermit { realDelayProber.probe(server.id) }
+                            } else {
+                                RealDelayOutcome(false)
+                            }
+                            server to ServerProbeResult(
+                                serverId = server.id,
+                                e2eOk = outcome.ok,
+                                e2eMs = outcome.e2eMs
+                            )
+                        }
+                    }
+                    val remaining = deferreds.toMutableList()
+                    try {
+                        while (remaining.isNotEmpty()) {
+                            val (deferred, pair) =
+                                select<Pair<Deferred<Pair<ServerConfig, ServerProbeResult>>, Pair<ServerConfig, ServerProbeResult>>> {
+                                    remaining.forEach { d -> d.onAwait { d to it } }
+                                }
+                            remaining.remove(deferred)
+                            val (server, result) = pair
+                            results[server.id] = result
+                            onResult(result)
+                            if (!result.e2eOk) {
+                                // Dead seed → drop it from the mine, free its share.
+                                if (mineIds.remove(server.id)) {
+                                    mine.removeAll { it.id == server.id }
+                                    val ownerId = profiles.firstOrNull { p -> p.servers.any { s -> s.id == server.id } }?.profileId
+                                    if (ownerId != null) {
+                                        filledByProfile[ownerId] = ((filledByProfile[ownerId] ?: 1) - 1).coerceAtLeast(0)
+                                    }
+                                    onMine(mine.toList())
+                                }
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } finally {
+                        remaining.forEach { if (!it.isCompleted) it.cancel() }
+                    }
+                }
+            } finally {
+                try {
+                    realDelayProber.stop()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // ignore
+                }
             }
         }
     }

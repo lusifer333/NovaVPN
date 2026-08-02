@@ -264,13 +264,13 @@ class MineFillerTest {
     }
 
     @Test
-    fun `previousMine healthy servers seed the mine without re-probing`() {
-        // All 3 servers were healthy in the previous run → warm start fills
-        // the mine (capacity 3) immediately; no probe calls should fire.
+    fun `previousMine healthy servers are re-probed and stay in the mine`() {
+        // All 3 servers were healthy before; warm start seeds all 3. They
+        // are re-probed (the pings refresh) and, being healthy again, stay.
         val prevMine = listOf(server("a"), server("b"), server("c"))
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any(), any()) } returns true
-        coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
+        coEvery { e2e.probe(any()) } returns RealDelayOutcome(true, 80)
         coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
         runBlocking {
@@ -280,24 +280,28 @@ class MineFillerTest {
             )
             assertEquals(3, r.mine.size)
             assertEquals(setOf("a", "b", "c"), r.mine.map { it.id }.toSet())
-            // No probes fired — warm start filled the mine (capacity=3) before
-            // the wave even started.
-            coVerify(exactly = 0) { e2e.probe(any()) }
+            // Every seed was re-probed — the pings are refreshed, not trusted.
+            coVerify(exactly = 1) { e2e.probe("a") }
+            coVerify(exactly = 1) { e2e.probe("b") }
+            coVerify(exactly = 1) { e2e.probe("c") }
         }
     }
 
     @Test
-    fun `previousMine seeds present servers and early-returns when full`() {
-        // Warm start carries over every previousMine server still present in a
-        // profile (orphans filtered). It does NOT re-probe them — it seeds them
-        // as-is and, once the mine is full, returns without touching the engine.
-        // prevMine has 4 servers, all still in the catalog; capacity = 3
-        // (clamp(ceil(4*0.10),3,12)=3) but warm-start adds all 4 then
-        // early-returns at capacity>=3.
+    fun `previousMine seeds present servers and re-probes them - dead dropped`() {
+        // Warm start carries over every previous server still present in a
+        // profile (orphans filtered). BUT seeds are NOT trusted — they are
+        // re-probed; a seed that fails is dropped from the mine and its slot
+        // freed for a healthy replacement.
+        // prevMine: a,b,c,d (all present). probe: a,c,d healthy at 120ms,
+        // b dead. capacity = clamp(ceil(4*0.10),3,12)=3.
         val prevMine = listOf(server("a"), server("b"), server("c"), server("d"))
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any(), any()) } returns true
-        coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
+        coEvery { e2e.probe(any()) } answers {
+            val id = firstArg<String>()
+            if (id == "b") RealDelayOutcome(false) else RealDelayOutcome(true, 120)
+        }
         coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
         runBlocking {
@@ -305,11 +309,32 @@ class MineFillerTest {
                 listOf(ProfileServers("p1", "P1", prevMine)),
                 previousMine = prevMine
             )
-            assertEquals(4, r.mine.size)
-            // Early return before any engine session boots or probes run.
-            coVerify(exactly = 0) { e2e.start(any(), any()) }
-            coVerify(exactly = 0) { e2e.probe(any()) }
-            coVerify(exactly = 0) { e2e.stop() }
+            // b re-probed → dead → dropped; a, c, d remain (3 = capacity).
+            assertEquals(setOf("a", "c", "d"), r.mine.map { it.id }.toSet())
+            coVerify { e2e.probe("b") }
+        }
+    }
+
+    @Test
+    fun `dead previousMine seed is replaced by a healthy catalog server`() {
+        // prevMine has only "old" (dead). Catalog has old (dead) + "a"
+        // (healthy). capacity = clamp(ceil(2*0.10),3,12)=3. After drop, the
+        // freed slot is backfilled by the healthy "a".
+        val prevMine = listOf(server("old"))
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any(), any()) } returns true
+        coEvery { e2e.probe(any()) } answers {
+            val id = firstArg<String>()
+            if (id == "a") RealDelayOutcome(true, 90) else RealDelayOutcome(false)
+        }
+        coEvery { e2e.stop() } returns Unit
+        val filler = MineFiller(e2e)
+        runBlocking {
+            val r = filler.fill(
+                listOf(ProfileServers("p1", "P1", listOf(server("old"), server("a")))),
+                previousMine = prevMine
+            )
+            assertEquals(setOf("a"), r.mine.map { it.id }.toSet())
         }
     }
 
@@ -332,13 +357,14 @@ class MineFillerTest {
     }
 
     @Test
-    fun `previousMine exactly fills capacity - no probes run`() {
+    fun `previousMine exactly fills capacity - seeds re-probed not trusted`() {
         // 3 servers all present in prevMine; capacity = clamp(ceil(3*0.10),3,12)
-        // = 3 → warm start fills exactly and returns; probe never fires.
+        // = 3 → warm start fills exactly. Seeds are STILL re-probed (no early
+        // return on full mine); healthy ones keep their place.
         val prevMine = listOf(server("a"), server("b"), server("c"))
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any(), any()) } returns true
-        coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
+        coEvery { e2e.probe(any()) } returns RealDelayOutcome(true, 100)
         coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
         runBlocking {
@@ -348,10 +374,8 @@ class MineFillerTest {
             )
             assertEquals(3, r.mine.size)
             assertEquals(setOf("a", "b", "c"), r.mine.map { it.id }.toSet())
-            // Early return: no engine session ever boots.
-            coVerify(exactly = 0) { e2e.start(any(), any()) }
-            coVerify(exactly = 0) { e2e.probe(any()) }
-            coVerify(exactly = 0) { e2e.stop() }
+            // All seeds refreshed by a live probe — not trusted from memory.
+            coVerify(exactly = 1) { e2e.probe(any()) }
         }
     }
 }
