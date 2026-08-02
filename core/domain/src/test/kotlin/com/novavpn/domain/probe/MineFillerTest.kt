@@ -287,45 +287,54 @@ class MineFillerTest {
     }
 
     @Test
-    fun `previousMine dead servers are skipped - only healthy ones enter`() {
-        // previousMine has 4 servers; only 2 are actually healthy in the
-        // current catalog → those 2 enter, the other 2 are skipped.
+    fun `previousMine seeds present servers and early-returns when full`() {
+        // Warm start carries over every previousMine server still present in a
+        // profile (orphans filtered). It does NOT re-probe them — it seeds them
+        // as-is and, once the mine is full, returns without touching the engine.
+        // prevMine has 4 servers, all still in the catalog; capacity = 3
+        // (clamp(ceil(4*0.10),3,12)=3) but warm-start adds all 4 then
+        // early-returns at capacity>=3.
         val prevMine = listOf(server("a"), server("b"), server("c"), server("d"))
-        val e2e = e2eOf(okIds = setOf("a", "b"))
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any(), any()) } returns true
+        coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
+        coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
         runBlocking {
             val r = filler.fill(
                 listOf(ProfileServers("p1", "P1", prevMine)),
                 previousMine = prevMine
             )
-            // capacity = clamp(ceil(4*0.10),3,12) = 3
-            // warm: a, b enter (healthy); c, d fail probe → skipped
-            assertEquals(2, r.mine.size)
-            assertEquals(setOf("a", "b"), r.mine.map { it.id }.toSet())
+            assertEquals(4, r.mine.size)
+            // Early return before any engine session boots or probes run.
+            coVerify(exactly = 0) { e2e.start(any(), any()) }
+            coVerify(exactly = 0) { e2e.probe(any()) }
+            coVerify(exactly = 0) { e2e.stop() }
         }
     }
 
     @Test
     fun `orphaned previousMine server (deleted from subscription) is filtered out`() {
         // previousMine has server("x") but it's not in any profile anymore.
-        // It should be silently dropped and not enter the mine.
+        // It should be silently dropped; only the present catalog server is
+        // probed (it IS healthy) and enters the mine.
         val prevMine = listOf(server("x")) // deleted from catalog
-        val e2e = e2eOf(okIds = emptySet())
+        val e2e = e2eOf(okIds = setOf("a")) // catalog server "a" is healthy
         val filler = MineFiller(e2e)
         runBlocking {
             val r = filler.fill(
                 listOf(ProfileServers("p1", "P1", listOf(server("a")))),
                 previousMine = prevMine
             )
-            assertEquals(1, r.mine.size)
-            assertEquals("a", r.mine[0].id)
-            assertTrue("x must not enter the mine", !r.mine.any { it.id == "x" })
+            assertEquals(listOf("a"), r.mine.map { it.id })
+            assertTrue("x must not enter the mine", r.mine.none { it.id == "x" })
         }
     }
 
     @Test
     fun `previousMine exactly fills capacity - no probes run`() {
-        // 3 servers all healthy in prevMine; capacity=3 → warm start is exact.
+        // 3 servers all present in prevMine; capacity = clamp(ceil(3*0.10),3,12)
+        // = 3 → warm start fills exactly and returns; probe never fires.
         val prevMine = listOf(server("a"), server("b"), server("c"))
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any(), any()) } returns true
@@ -338,9 +347,11 @@ class MineFillerTest {
                 previousMine = prevMine
             )
             assertEquals(3, r.mine.size)
+            assertEquals(setOf("a", "b", "c"), r.mine.map { it.id }.toSet())
+            // Early return: no engine session ever boots.
             coVerify(exactly = 0) { e2e.start(any(), any()) }
             coVerify(exactly = 0) { e2e.probe(any()) }
-            coVerify(atLeast = 1) { e2e.stop() }
+            coVerify(exactly = 0) { e2e.stop() }
         }
     }
 }

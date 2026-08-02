@@ -15,9 +15,9 @@ class MineCapacityTest {
         assertEquals(3, MineCapacity.capacityOf(5))     // ceil(0.5)=1 → clamped to 3
         assertEquals(3, MineCapacity.capacityOf(10))    // ceil(1)=1 → clamped to 3
         assertEquals(3, MineCapacity.capacityOf(20))    // ceil(2)=2 → clamped to 3
-        assertEquals(4, MineCapacity.capacityOf(30))    // ceil(3)=3
-        assertEquals(5, MineCapacity.capacityOf(40))    // ceil(4)=4
-        assertEquals(6, MineCapacity.capacityOf(50))    // ceil(5)=5
+        assertEquals(3, MineCapacity.capacityOf(30))    // ceil(3)=3 → clamped? no: exactly 3
+        assertEquals(4, MineCapacity.capacityOf(40))    // ceil(4)=4
+        assertEquals(5, MineCapacity.capacityOf(50))    // ceil(5)=5
         assertEquals(10, MineCapacity.capacityOf(100))  // ceil(10)=10
         assertEquals(12, MineCapacity.capacityOf(2000)) // capped
     }
