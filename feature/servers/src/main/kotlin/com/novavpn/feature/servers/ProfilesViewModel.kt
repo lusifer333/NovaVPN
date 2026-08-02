@@ -9,7 +9,6 @@ import com.novavpn.domain.probe.MineCapacity
 import com.novavpn.domain.probe.MineFiller
 import com.novavpn.domain.probe.ProfileServers
 import com.novavpn.domain.probe.RealDelayProber
-import com.novavpn.domain.probe.ServerProber
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SubscriptionRepository
 import com.novavpn.domain.usecase.server.SelectServerUseCase
@@ -51,7 +50,6 @@ class ProfilesViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val serverRepository: ServerRepository,
     private val selectServerUseCase: SelectServerUseCase,
-    private val serverProber: ServerProber,
     private val realDelayProber: RealDelayProber
 ) : ViewModel() {
 
@@ -112,10 +110,11 @@ class ProfilesViewModel @Inject constructor(
     }
 
     /**
-     * «پر کردن معدن» — three-stage streaming fill:
-     *  1+2. merged TCP+TLS probe (parallel batch),
-     *  3. real-delay relay round-trip through the real engine (bounded wave).
-     * Stops the moment the mine is full; per-profile shares are respected.
+     * «پر کردن معدن» — single Karing-style urltest fill:
+     * every server is probed with a real HTTP round-trip through the
+     * shared engine; results stream in completion order (best-first) and
+     * the fill stops the moment the mine is full. Per-profile shares are
+     * respected.
      */
     fun fillMine() {
         val current = _state.value
@@ -127,7 +126,7 @@ class ProfilesViewModel @Inject constructor(
 
         _state.update { it.copy(isFilling = true, mine = emptyList(), results = emptyMap()) }
         viewModelScope.launch {
-            val result = MineFiller(serverProber, realDelayProber).fill(
+            val result = MineFiller(realDelayProber).fill(
                 profiles = profiles,
                 onResult = { res ->
                     if (res.serverId.isNotBlank()) {

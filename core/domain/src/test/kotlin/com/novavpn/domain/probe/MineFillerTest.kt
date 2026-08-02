@@ -1,6 +1,5 @@
 package com.novavpn.domain.probe
 
-import com.novavpn.domain.model.CertStatus
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import io.mockk.coEvery
@@ -17,25 +16,10 @@ class MineFillerTest {
     private fun server(id: String): ServerConfig =
         ServerConfig(id = id, name = id, address = "127.0.0.1", port = 1)
 
-    private fun green(id: String): ServerProbeResult =
-        ServerProbeResult(serverId = id, tcpOk = true, tcpMs = 10, tlsOk = true, tlsMs = 20, certStatus = CertStatus.VALID)
+    private fun result(id: String, ok: Boolean, ms: Long? = if (ok) 120L else null): ServerProbeResult =
+        ServerProbeResult(serverId = id, e2eOk = ok, e2eMs = ms)
 
-    private fun dead(id: String): ServerProbeResult = ServerProbeResult(serverId = id)
-
-    /** Prober whose fastTlsProbe outcome is decided per server id. */
-    private fun proberOf(greens: Set<String>, dead: Set<String> = emptySet()): ServerProber {
-        val p = mockk<ServerProber>()
-        coEvery { p.fastTlsProbe(any(), any()) } answers {
-            val s = firstArg<ServerConfig>()
-            when {
-                s.id in greens -> green(s.id)
-                else -> dead(s.id)
-            }
-        }
-        return p
-    }
-
-    /** E2E prober whose session always starts; probe outcome per server id. */
+    /** Karing urltest prober whose session always starts; verdict per server id. */
     private fun e2eOf(okIds: Set<String>): RealDelayProber {
         val p = mockk<RealDelayProber>()
         coEvery { p.start(any()) } returns true
@@ -50,24 +34,23 @@ class MineFillerTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `dead server fails at stage 1 and never reaches real delay`() {
-        val e2e = e2eOf(okIds = emptySet())
-        val filler = MineFiller(proberOf(greens = emptySet()), e2e)
+    fun `dead relay never enters the mine`() {
+        // The only test is the urltest round-trip — no handshake stage
+        // left to pass. A server that does not relay HTTP traffic fails.
+        val filler = MineFiller(e2eOf(okIds = emptySet()))
         runBlocking {
             val r = filler.fill(
-                listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b"), server("c")))),
-                probeParallelism = 2
+                listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b"), server("c"))))
             )
             assertEquals(0, r.mine.size)
             assertEquals(3, r.results.size)
-            assertTrue(r.results.values.none { it.green })
+            assertTrue(r.results.values.none { it.healthy })
         }
-        coVerify(exactly = 0) { e2e.probe(any()) }
     }
 
     @Test
-    fun `healthy server passes all three stages and enters the mine`() {
-        val filler = MineFiller(proberOf(greens = setOf("a")), e2eOf(okIds = setOf("a")))
+    fun `healthy relay enters the mine with its round-trip delay`() {
+        val filler = MineFiller(e2eOf(okIds = setOf("a")))
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
             assertEquals(listOf("a"), r.mine.map { it.id })
@@ -78,22 +61,9 @@ class MineFillerTest {
     }
 
     @Test
-    fun `handshake-green but relay-dead server does not enter the mine`() {
-        // TLS passes but the real-delay relay fails (the handshake-yes/data-no case)
-        val filler = MineFiller(proberOf(greens = setOf("a")), e2eOf(okIds = emptySet()))
-        runBlocking {
-            val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
-            assertEquals(0, r.mine.size)
-            assertTrue(r.results["a"]!!.green)
-            assertTrue(!r.results["a"]!!.healthy)
-        }
-    }
-
-    @Test
     fun `fill stops the moment the mine is full`() {
         // 4 servers, capacity = clamp(ceil(4*0.3),3,12) = 3 → after 3 healthy, the 4th must NOT be probed
-        val prober = proberOf(greens = setOf("a", "b", "c", "d"))
-        val filler = MineFiller(prober, e2eOf(okIds = setOf("a", "b", "c", "d")))
+        val filler = MineFiller(e2eOf(okIds = setOf("a", "b", "c", "d")))
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b"), server("c"), server("d")))))
             assertEquals(3, r.mine.size)
@@ -108,14 +78,13 @@ class MineFillerTest {
         val bServers = (0 until 50).map { server("b$it") }
         val aServers = (0 until 5).map { server("a$it") }
         val allIds = bServers.map { it.id } + aServers.map { it.id }
-        val filler = MineFiller(proberOf(greens = allIds.toSet()), e2eOf(okIds = allIds.toSet()))
+        val filler = MineFiller(e2eOf(okIds = allIds.toSet()))
         runBlocking {
             val r = filler.fill(
                 listOf(
                     ProfileServers("B", "B", bServers),
                     ProfileServers("A", "A", aServers)
-                ),
-                probeParallelism = 100
+                )
             )
             assertEquals(12, r.mine.size)
             // A has 5 servers and share 1 → exactly one of a* in the mine
@@ -128,7 +97,7 @@ class MineFillerTest {
     fun `partial mine when not enough healthy servers`() {
         // 10 servers, only 2 healthy → mine has 2, no hang
         val ids = (0 until 10).map { "s$it" }
-        val filler = MineFiller(proberOf(greens = setOf("s0", "s1")), e2eOf(okIds = setOf("s0", "s1")))
+        val filler = MineFiller(e2eOf(okIds = setOf("s0", "s1")))
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", ids.map { server(it) })))
             assertEquals(2, r.mine.size)
@@ -137,10 +106,6 @@ class MineFillerTest {
 
     @Test
     fun `mine is sorted by real delay ascending`() {
-        val prober = mockk<ServerProber>()
-        coEvery { prober.fastTlsProbe(any(), any()) } answers {
-            green(firstArg<ServerConfig>().id)
-        }
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any()) } returns true
         coEvery { e2e.probe(any()) } coAnswers {
@@ -154,11 +119,10 @@ class MineFillerTest {
             }
         }
         coEvery { e2e.stop() } returns Unit
-        val filler = MineFiller(prober, e2e)
+        val filler = MineFiller(e2e)
         runBlocking {
             val r = filler.fill(
                 listOf(ProfileServers("p1", "P1", listOf(server("s5"), server("s1"), server("s3"), server("s2")))),
-                probeParallelism = 100,
                 e2eParallelism = 3
             )
             // Fast relays complete instantly and fill the mine (capacity 3);
@@ -169,7 +133,7 @@ class MineFillerTest {
 
     @Test
     fun `empty input yields empty mine`() {
-        val filler = MineFiller(proberOf(greens = emptySet()), e2eOf(okIds = emptySet()))
+        val filler = MineFiller(e2eOf(okIds = emptySet()))
         runBlocking {
             val r = filler.fill(emptyList())
             assertEquals(0, r.mine.size)
@@ -179,13 +143,13 @@ class MineFillerTest {
 
     @Test
     fun `engine start failure admits nobody - no false positives`() {
-        // The shared Karing-style session could not boot → stage 3 is
-        // unavailable, and handshake-only servers must NOT fill the mine.
+        // The shared Karing-style session could not boot → no server can
+        // be tested, and the mine must stay empty.
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any()) } returns false
         coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
         coEvery { e2e.stop() } returns Unit
-        val filler = MineFiller(proberOf(greens = setOf("a", "b")), e2e)
+        val filler = MineFiller(e2e)
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b")))))
             assertEquals(0, r.mine.size)
@@ -197,7 +161,7 @@ class MineFillerTest {
     @Test
     fun `engine session starts once with all candidates and stops after fill`() {
         val e2e = e2eOf(okIds = setOf("a"))
-        val filler = MineFiller(proberOf(greens = setOf("a")), e2e)
+        val filler = MineFiller(e2e)
         runBlocking {
             filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
         }

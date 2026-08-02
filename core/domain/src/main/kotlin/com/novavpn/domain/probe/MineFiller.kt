@@ -10,56 +10,40 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-/**
- * One subscription group fed to the mine filler.
- */
+/** One subscription group fed to the mine filler. */
 data class ProfileServers(
     val profileId: String,
     val profileName: String,
     val servers: List<ServerConfig>
 )
 
-/**
- * Outcome of a mine-fill run.
- *
- * @param mine the curated healthy servers, best-first (sorted by real
- *   delay, ascending) — may be smaller than capacity (partial mine).
- * @param results per-server probe outcomes for every tested server.
- */
+/** Outcome of a mine-fill run. */
 data class MineFillResult(
     val mine: List<ServerConfig>,
     val results: Map<String, ServerProbeResult>
 )
 
 /**
- * The mine filler (پر کردن معدن).
+ * The mine filler (پر کردن معدن) — Karing-style: ONE test, ONE ping.
  *
- * Streaming three-stage pipeline, one config at a time, early-exit at
- * every stage:
+ * The only test is the sing-box/Karing urltest: a real HTTP round-trip
+ * (https://www.gstatic.com/generate_204 → 204) through the server's
+ * tunnel, measured end-to-end. The 204 verdict is the test, the
+ * round-trip time is the ping — both from the same request. There is no
+ * separate handshake stage anymore: a server either relays traffic or it
+ * doesn't, and only relaying servers enter the mine.
  *
- *  1. Merged probe (TCP connect + TLS handshake on ONE socket) — parallel
- *     across a probe batch ([probeParallelism], default 100).
- *  2. Real-delay relay probe through the actual engine — only for the
- *     greens of the current batch, as a bounded wave ([e2eParallelism],
- *     default 3).
- *  3. A config enters the mine only when BOTH stages passed.
- *
- * Stage 3 uses Karing/sing-box urltest semantics: ONE shared engine
- * session ([RealDelayProber.start]) carries every candidate server, and
- * each probe is a REAL HTTP round-trip (https://www.gstatic.com/generate_204
- * → 204) through that server's tunnel — a server that doesn't actually
- * relay traffic can never pass.
- *
- * Profiles are processed in order; each profile's proportional share (see
- * [MineCapacity]) is filled before moving to the next profile. The whole
- * run stops the moment the mine is full. A dead server costs one fast
- * probe; only greens pay the engine round-trip.
+ * All probes run against ONE shared engine session ([RealDelayProber.start]),
+ * so the fill is fast and the phone never freezes (no per-server spawns).
+ * Results stream in completion order (best-first) with early-stop: the
+ * mine fills with the fastest relays first, per-profile shares (see
+ * [MineCapacity]) are respected, and probes still running when the mine
+ * is full are cancelled.
  *
  * Pure JVM — [RealDelayProber] is injected (fake in unit tests, real
  * engine implementation on device).
  */
 class MineFiller(
-    private val prober: ServerProber,
     private val realDelayProber: RealDelayProber
 ) {
 
@@ -67,16 +51,12 @@ class MineFiller(
      * Fill the mine.
      *
      * @param profiles subscription groups, processed in order.
-     * @param probeParallelism concurrent merged probes (stage 1+2).
-     * @param e2eParallelism concurrent real-delay engines (stage 3 wave).
-     * @param onResult per-server outcome, emitted as soon as each stage of
-     *   that server completes (a green server emits twice: after 1+2 and
-     *   after 3).
+     * @param e2eParallelism concurrent real-delay probes (bounded wave).
+     * @param onResult per-server outcome, emitted as soon as it completes.
      * @param onMine current mine contents, emitted on every change.
      */
     suspend fun fill(
         profiles: List<ProfileServers>,
-        probeParallelism: Int = DEFAULT_PROBE_PARALLELISM,
         e2eParallelism: Int = DEFAULT_E2E_PARALLELISM,
         onResult: (ServerProbeResult) -> Unit = {},
         onMine: (List<ServerConfig>) -> Unit = {}
@@ -85,9 +65,6 @@ class MineFiller(
         val allServers = profiles.flatMap { it.servers }
         var engineStarted = false
         try {
-            // One shared engine session for the whole fill run — Karing-style:
-            // a single instance carrying every candidate as an outbound, so
-            // stage 3 spawns zero extra processes (fast, no phone freeze).
             if (totalServers > 0) {
                 engineStarted = try {
                     realDelayProber.start(allServers)
@@ -104,7 +81,7 @@ class MineFiller(
             val mine = mutableListOf<ServerConfig>()
             val mineIds = mutableSetOf<String>()
             val filledByProfile = mutableMapOf<String, Int>()
-            val e2eSemaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
+            val semaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
 
             profileLoop@ for (profile in profiles) {
                 if (profile.servers.isEmpty()) continue
@@ -116,49 +93,28 @@ class MineFiller(
                 )
                 if (share <= 0) continue
 
-                for (batch in profile.servers.chunked(probeParallelism.coerceAtLeast(1))) {
-                    val profileFilled = filledByProfile[profile.profileId] ?: 0
-                    if (mine.size >= capacity || profileFilled >= share) break
-
-                    // ── Stage 1+2: merged probes across the batch, parallel ──
-                    val batchOutcomes = coroutineScope {
-                        batch.map { server ->
-                            async { prober.fastTlsProbe(server) }
-                        }.map { it.await() }
-                    }
-                    val greens = mutableListOf<Pair<ServerConfig, ServerProbeResult>>()
-                    for ((server, result) in batch.zip(batchOutcomes)) {
-                        results[result.serverId] = result
-                        onResult(result)
-                        if (result.green) greens += server to result
-                    }
-                    if (greens.isEmpty()) continue
-
-                    // ── Stage 3: real-delay wave on the greens, early-stop ──
-                    val wave = e2eWave(
-                        greens = greens,
-                        semaphore = e2eSemaphore,
-                        engineUp = engineStarted,
-                        mine = mine,
-                        mineIds = mineIds,
-                        capacity = capacity,
-                        profileId = profile.profileId,
-                        share = share,
-                        filledByProfile = filledByProfile,
-                        results = results,
-                        onResult = onResult,
-                        onMine = onMine
-                    )
-                    if (wave) continue@profileLoop
-                }
+                // The single Karing urltest wave over this profile's servers.
+                val filled = e2eWave(
+                    servers = profile.servers,
+                    semaphore = semaphore,
+                    engineUp = engineStarted,
+                    mine = mine,
+                    mineIds = mineIds,
+                    capacity = capacity,
+                    profileId = profile.profileId,
+                    share = share,
+                    filledByProfile = filledByProfile,
+                    results = results,
+                    onResult = onResult,
+                    onMine = onMine
+                )
+                if (filled) continue@profileLoop
             }
 
-            // Best-first: sorted by real delay (ascending), green-only.
+            // Best-first: sorted by round-trip delay (ascending).
             val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
             return MineFillResult(sorted, results)
         } finally {
-            // Always tear the shared session down — a fill run must never
-            // leave a probe xray running on the phone.
             if (engineStarted) {
                 try {
                     realDelayProber.stop()
@@ -172,7 +128,7 @@ class MineFiller(
     }
 
     /**
-     * Runs real-delay probes for the batch's greens as a bounded wave.
+     * Runs the Karing urltest probes for [servers] as a bounded wave.
      *
      * Results are consumed in COMPLETION order (fastest relay first), so
      * the mine fills best-first while the wave still runs; early-stop is
@@ -180,7 +136,7 @@ class MineFiller(
      * mine) filled — the caller then moves to the next profile / stops.
      */
     private suspend fun e2eWave(
-        greens: List<Pair<ServerConfig, ServerProbeResult>>,
+        servers: List<ServerConfig>,
         semaphore: Semaphore,
         engineUp: Boolean,
         mine: MutableList<ServerConfig>,
@@ -193,17 +149,21 @@ class MineFiller(
         onResult: (ServerProbeResult) -> Unit,
         onMine: (List<ServerConfig>) -> Unit
     ): Boolean = coroutineScope {
-        val deferreds = greens.map { (server, base) ->
+        val deferreds = servers.map { server ->
             async {
-                // No engine session → nothing can pass stage 3 (no false
+                // No engine session → nothing can pass (no false
                 // positives): the mine stays empty rather than filling
-                // with handshake-only servers.
+                // with untested servers.
                 val outcome = if (engineUp) {
                     semaphore.withPermit { realDelayProber.probe(server.id) }
                 } else {
                     RealDelayOutcome(false)
                 }
-                server to base.copy(e2eOk = outcome.ok, e2eMs = outcome.e2eMs)
+                server to ServerProbeResult(
+                    serverId = server.id,
+                    e2eOk = outcome.ok,
+                    e2eMs = outcome.e2eMs
+                )
             }
         }
         val remaining = deferreds.toMutableList()
@@ -237,7 +197,8 @@ class MineFiller(
     }
 
     private companion object {
-        const val DEFAULT_PROBE_PARALLELISM = 100
-        const val DEFAULT_E2E_PARALLELISM = 3
+        // sing-box's urltest exercises ALL outbounds at once; a bounded
+        // wave keeps the phone responsive while still streaming fast.
+        const val DEFAULT_E2E_PARALLELISM = 8
     }
 }

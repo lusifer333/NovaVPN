@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.novavpn.domain.model.CertStatus
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import com.novavpn.domain.model.Subscription
@@ -213,7 +212,9 @@ fun ServerListItem(
             }
         }
 
-        // Two-stage fast test badges: ⚡ TCP RTT + 🔒 TLS handshake + cert
+        // Single Karing-style urltest badge: 🚀 real HTTP round-trip
+        // delay. One test + one ping — the server either relays traffic
+        // (204) or it doesn't.
         if (probeResult != null) {
             Spacer(Modifier.height(8.dp))
             Row(
@@ -221,25 +222,9 @@ fun ServerListItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ProbeBadge(
-                    text = probeResult.tcpMs?.let { "⚡ ${it}ms" } ?: "⚡ ✗",
-                    color = if (probeResult.tcpOk) StatusHealthy else StatusUnhealthy
+                    text = probeResult.e2eMs?.let { "🚀 ${it}ms" } ?: "🚀 ✗",
+                    color = if (probeResult.e2eOk) StatusHealthy else StatusUnhealthy
                 )
-                if (probeResult.tcpOk) {
-                    ProbeBadge(
-                        text = probeResult.tlsMs?.let { "🔒 ${it}ms" } ?: "🔒 ✗",
-                        color = if (probeResult.tlsOk) StatusHealthy else StatusUnhealthy
-                    )
-                    CertBadge(probeResult.certStatus)
-                }
-                // Real-delay stage (🚀) — only attempted for two-stage greens.
-                // Shown as "🚀 ✗" when the relay round-trip failed, proving
-                // handshake-yes/data-no servers stay out of the mine.
-                if (probeResult.green) {
-                    ProbeBadge(
-                        text = probeResult.e2eMs?.let { "🚀 ${it}ms" } ?: "🚀 ✗",
-                        color = if (probeResult.e2eOk) StatusHealthy else StatusUnhealthy
-                    )
-                }
             }
         }
         }
@@ -260,18 +245,6 @@ private fun ProbeBadge(text: String, color: Color) {
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
-}
-
-/** Certificate status badge: 🛡️ valid / ⚠️ self-signed / ✗ invalid. */
-@Composable
-private fun CertBadge(status: CertStatus) {
-    val (text, color) = when (status) {
-        CertStatus.VALID -> "🛡️✓" to StatusHealthy
-        CertStatus.SELF_SIGNED -> "🛡️⚠" to Color(0xFFFFA000)
-        CertStatus.INVALID_CHAIN -> "🛡️✗" to StatusUnhealthy
-        CertStatus.NONE -> return
-    }
-    ProbeBadge(text = text, color = color)
 }
 
 /**
