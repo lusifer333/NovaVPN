@@ -195,9 +195,10 @@ class NovaVpnService : VpnService() {
             Timber.tag(TAG).i("[VpnLifecycle] Cancelling previous connection job before re-connect")
             reconnectRequested = true
             prevJob.cancel()
+        } else {
+            reconnectRequested = false
         }
         connectionJob = serviceScope.launch {
-            reconnectRequested = false
             connectMutex.withLock {
                 try {
                     ensureActive()
@@ -240,7 +241,19 @@ class NovaVpnService : VpnService() {
                     atomicTeardown()
                 } catch (e: CancellationException) {
                     Timber.tag(TAG).w("[VpnLifecycle] CONNECT_CANCELLED: %s", e.message)
-                    if (!reconnectRequested) {
+                    if (reconnectRequested) {
+                        // Legit server switch: tear down the old interface so the
+                        // new connection can build a fresh TUN (Android allows only
+                        // one active VPN interface) and FREE the mutex for the new
+                        // job. Keep the service alive (stopService=false) — stopSelf()
+                        // would trigger onDestroy → serviceScope.cancel(), killing
+                        // the new connection job. Don't emit a spurious error.
+                        try {
+                            atomicTeardown(stopService = false)
+                        } catch (te: Exception) {
+                            Timber.tag(TAG).w(te, "[VpnLifecycle] teardown during reconnect failed: %s", te.message)
+                        }
+                    } else {
                         connectUseCase.updateState(VpnState.Error("Connection cancelled"))
                         updateNotification("Cancelled")
                     }
@@ -574,7 +587,7 @@ class NovaVpnService : VpnService() {
      * Safe to call multiple times (idempotent via [engineStarted] /
      * [bridgeStarted] flags and null-checks).
      */
-    private suspend fun atomicTeardown() {
+    private suspend fun atomicTeardown(stopService: Boolean = true) {
         Timber.tag(TAG).i("[VpnLifecycle] Atomic teardown: engineStarted=%s, bridgeStarted=%s",
             engineStarted, bridgeStarted)
 
@@ -611,10 +624,14 @@ class NovaVpnService : VpnService() {
         tunName = ""
 
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
         connectUseCase.updateState(VpnState.Disconnected)
-        stopSelf()
-        Timber.tag(TAG).i("[VpnLifecycle] Teardown complete — service stopped")
+        if (stopService) {
+            Timber.tag(TAG).i("[VpnLifecycle] Calling stopSelf()...")
+            stopSelf()
+        } else {
+            Timber.tag(TAG).i("[VpnLifecycle] Keeping service alive for reconnect — not calling stopSelf()")
+        }
+        Timber.tag(TAG).i("[VpnLifecycle] Atomic teardown complete — service %s", if (stopService) "stopped" else "kept for reconnect")
     }
 
     /**
