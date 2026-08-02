@@ -5,9 +5,7 @@ import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.just
 import io.mockk.mockk
-import io.mockk.runs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -45,7 +43,7 @@ class MineFillerTest {
             val id = firstArg<String>()
             if (id in okIds) RealDelayOutcome(true, 120) else RealDelayOutcome(false)
         }
-        coEvery { p.stop() } just Runs
+        coEvery { p.stop() } returns Unit
         return p
     }
 
@@ -155,7 +153,7 @@ class MineFillerTest {
                 RealDelayOutcome(true, ms)
             }
         }
-        coEvery { e2e.stop() } just Runs
+        coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(prober, e2e)
         runBlocking {
             val r = filler.fill(
@@ -186,7 +184,7 @@ class MineFillerTest {
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.start(any()) } returns false
         coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
-        coEvery { e2e.stop() } just Runs
+        coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(proberOf(greens = setOf("a", "b")), e2e)
         runBlocking {
             val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b")))))
