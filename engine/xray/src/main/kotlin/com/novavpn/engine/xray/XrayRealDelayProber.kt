@@ -190,7 +190,7 @@ class XrayRealDelayProber @Inject constructor(
         const val TAG = "XrayRealDelay"
         const val PROBE_BASE_PORT = 10818
         const val INIT_WAIT_MS = 12_000L
-        const val ATTEMPT_TIMEOUT_MS = 8_000
+        const val ATTEMPT_TIMEOUT_MS = 3_500
         const val ATTEMPTS = 1
     }
 }
