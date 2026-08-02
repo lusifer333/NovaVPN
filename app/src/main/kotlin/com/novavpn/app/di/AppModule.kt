@@ -4,12 +4,14 @@ import android.content.Context
 import com.novavpn.app.service.AndroidBinaryManager
 import com.novavpn.app.service.VpnServiceStarterImpl
 import com.novavpn.domain.model.EngineType
+import com.novavpn.domain.probe.RealDelayProber
 import com.novavpn.domain.usecase.connection.VpnServiceStarter
 import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.api.EngineManagerImpl
 import com.novavpn.engine.singbox.SingboxEngine
 import com.novavpn.engine.xray.XrayEngine
+import com.novavpn.engine.xray.XrayRealDelayProber
 import com.novavpn.logging.NovaLogger
 import dagger.Module
 import dagger.Provides
@@ -56,4 +58,11 @@ object AppModule {
     fun provideVpnServiceStarter(
         impl: VpnServiceStarterImpl
     ): VpnServiceStarter = impl
+
+    @Provides
+    @Singleton
+    fun provideRealDelayProber(
+        binaryManager: BinaryManager,
+        @ApplicationContext context: Context
+    ): RealDelayProber = XrayRealDelayProber(binaryManager, context)
 }
