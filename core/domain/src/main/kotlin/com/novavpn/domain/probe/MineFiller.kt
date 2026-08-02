@@ -222,7 +222,7 @@ class MineFiller(
     companion object {
         // sing-box's urltest exercises ALL outbounds at once; a bounded
         // wave keeps the phone responsive while still streaming fast.
-        const val DEFAULT_E2E_PARALLELISM = 8
+        const val DEFAULT_E2E_PARALLELISM = 16
 
         // Bounded engine session size. Android's RLIMIT_NOFILE is ~1024
         // and each probe outbound needs descriptors, so chunks of 100 keep

@@ -53,7 +53,7 @@ object TrafficProbe {
         host: String = TEST_HOST,
         port: Int = TEST_PORT,
         path: String = TEST_PATH,
-        timeoutMs: Int = 15_000
+        timeoutMs: Int = 8_000
     ): Long? {
         var socket: Socket? = null
         return try {
