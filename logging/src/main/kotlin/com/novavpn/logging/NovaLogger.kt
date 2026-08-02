@@ -130,21 +130,31 @@ class NovaLogger @Inject constructor() {
 /**
  * A fixed-size circular (ring) buffer backed by [LinkedList].
  * When the buffer reaches [capacity], the oldest element is evicted.
+ *
+ * **Thread-safe**: logging can originate from many coroutines
+ * (e.g. the E2E prober with DEFAULT_E2E_PARALLELISM using
+ * Dispatchers.Default workers) plus UI-triggered [clear]. The atomic
+ * check-then-remove in `add` and a concurrent `clear` must be
+ * serialised, otherwise `removeFirst()` can hit an empty list and
+ * throw `NoSuchElementException`.
  */
 internal class CircularBuffer<T>(private val capacity: Int) {
 
+    private val lock = Any()
     private val list = LinkedList<T>()
 
     fun add(element: T) {
-        if (list.size >= capacity) {
-            list.removeFirst()
+        synchronized(lock) {
+            if (list.size >= capacity) {
+                list.removeFirst()
+            }
+            list.addLast(element)
         }
-        list.addLast(element)
     }
 
-    fun toList(): List<T> = list.toList()
+    fun toList(): List<T> = synchronized(lock) { list.toList() }
 
-    fun clear() { list.clear() }
+    fun clear() = synchronized(lock) { list.clear() }
 
-    val size: Int get() = list.size
+    val size: Int get() = synchronized(lock) { list.size }
 }
