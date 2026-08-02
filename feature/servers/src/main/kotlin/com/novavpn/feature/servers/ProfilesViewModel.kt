@@ -157,11 +157,11 @@ class ProfilesViewModel @Inject constructor(
         if (_state.value.isFilling) return
         viewModelScope.launch {
             try {
-                val settings = settingsRepository.get()
-                val options = ProbeOptions(
-                    fragmentTls = settings.enableTlsFragment,
-                    keepAlive = settings.enableTcpKeepAlive
-                )
+                // Plain, lightweight probe — intentionally NOT influenced by the
+                // connection-settings toggles (TLS fragment / TCP keepalive /
+                // block QUIC). This is just a reachability test; let the real
+                // connect path apply the actual settings.
+                val options = ProbeOptions()
                 val started = realDelayProber.start(listOf(server), options)
                 val outcome = try {
                     if (started) {

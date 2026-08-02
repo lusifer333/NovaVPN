@@ -166,11 +166,9 @@ class HomeViewModel @Inject constructor(
             .map { ProfileServers(it.id, it.name, bySubscription[it.id].orEmpty()) }
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return null
 
-        val settings = settingsRepository.get()
-        val options = ProbeOptions(
-            fragmentTls = settings.enableTlsFragment,
-            keepAlive = settings.enableTcpKeepAlive
-        )
+        // Plain, lightweight probe just to pick the fastest *reachable* relay —
+        // not influenced by connection toggles (TLS fragment / TCP keepalive).
+        val options = ProbeOptions()
         val result = fillMineUseCase(profiles, options, previousMine = mineRepository.get())
         return result.mine.firstOrNull()
     }
