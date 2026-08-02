@@ -141,9 +141,13 @@ class MineFillerTest {
         val e2e = mockk<RealDelayProber>()
         coEvery { e2e.probe(any()) } coAnswers {
             val id = firstArg<ServerConfig>().id
-            val ms = id.removePrefix("s").toLong()
-            delay(ms) // completion order == delay order
-            RealDelayOutcome(true, ms)
+            if (id == "s5") {
+                delay(500) // slowest relay: loses the race to the mine
+                RealDelayOutcome(true, 500)
+            } else {
+                val ms = id.removePrefix("s").toLong() // s1→1, s2→2, s3→3
+                RealDelayOutcome(true, ms)
+            }
         }
         val filler = MineFiller(prober, e2e)
         runBlocking {
@@ -152,8 +156,8 @@ class MineFillerTest {
                 probeParallelism = 100,
                 e2eParallelism = 3
             )
-            // Wave admits in completion order and stops at capacity 3 —
-            // the slowest relay (s5) is cancelled, the fastest 3 win.
+            // Fast relays complete instantly and fill the mine (capacity 3);
+            // the 500 ms relay is cancelled — fastest 3 win, sorted ascending.
             assertEquals(listOf("s1", "s2", "s3"), r.mine.map { it.id })
         }
     }
