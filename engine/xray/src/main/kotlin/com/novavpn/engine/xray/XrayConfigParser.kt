@@ -592,19 +592,24 @@ object XrayConfigParser {
      * Build the `streamSettings` block based on the config's transport and
      * security fields. Reality is a transport-level security layer (part of
      * streamSettings), while TLS is indicated by setting the security field.
+     *
+     * NOTE (Xray 26): the old QUIC transport (network:"quic") was REMOVED and
+     * migrated to XHTTP stream-one H3 (network:"xhttp"). A `Transport.QUIC`
+     * config therefore compiles to xhttp H3, NOT to a "quic" network — the
+     * latter is rejected by xray 26 (exit error "The feature QUIC transport...
+     * has been removed and migrated to XHTTP stream-one H3").
      */
     private fun buildStreamSettings(
         config: ServerConfig,
         fragmentTls: Boolean = false,
         keepAlive: Boolean = true
     ): JsonObject = buildJsonObject {
-        // Network (transport protocol)
+        // Network (transport protocol). QUIC is migrated to XHTTP H3 in Xray 26.
         val network = when (config.transport) {
             Transport.TCP -> "tcp"
             Transport.WebSocket -> "ws"
-            Transport.XHTTP -> "xhttp"
+            Transport.XHTTP, Transport.QUIC -> "xhttp"
             Transport.gRPC -> "grpc"
-            Transport.QUIC -> "quic"
             Transport.HTTP -> "http"
             Transport.Unknown -> "tcp"
         }
@@ -629,12 +634,11 @@ object XrayConfigParser {
             }
         }
 
-        // Transport-specific settings
+        // Transport-specific settings.
         when (config.transport) {
             Transport.WebSocket -> put("wsSettings", buildWsSettings(config))
-            Transport.XHTTP -> put("xhttpSettings", buildXhttpSettings(config))
+            Transport.XHTTP, Transport.QUIC -> put("xhttpSettings", buildXhttpSettings(config))
             Transport.gRPC -> put("grpcSettings", buildGrpcSettings(config))
-            Transport.QUIC -> put("quicSettings", buildQuicSettings(config))
             Transport.HTTP -> put("httpSettings", buildHttpTransportSettings(config))
             else -> { /* TCP needs no extra settings */ }
         }
@@ -649,6 +653,7 @@ object XrayConfigParser {
                 put("tcpKeepAliveIdle", JsonPrimitive(60))
                 put("tcpKeepAliveInterval", JsonPrimitive(15))
             }
+            // Fragment is TCP-only: H3 (migrated QUIC) must NOT be fragmented.
             if (fragment) {
                 // Patterniha TLS fragmentation: route the proxy dial through
                 // the fragment-out freedom outbound so the TLS ClientHello is
@@ -741,17 +746,30 @@ object XrayConfigParser {
         }
     }
 
+    /**
+     * Build `xhttpSettings` for the XHTTP transport (and for migrated QUIC→H3).
+     *
+     * Xray 26 `SplitHTTPConfig.host` is a STRING (an array is rejected:
+     * "json: cannot unmarshal array into Go struct field
+     * SplitHTTPConfig.outbounds.streamSettings.xhttpSettings.host of type
+     * string"). `mode` selects the connection model: "auto" lets the client
+     * negotiate HTTP/2 or H3; for a config that was originally QUIC (H3), the
+     * caller keeps "auto" and Xray falls back to H3 when the server supports it.
+     */
     private fun buildXhttpSettings(config: ServerConfig): JsonObject {
         val raw = parseRawConfig(config.rawConfig)
         val host = raw?.get("host")?.jsonPrimitive?.content
             ?: raw?.get("headers")?.jsonObject?.get("Host")?.jsonPrimitive?.content
+            ?: raw?.get("serverName")?.jsonPrimitive?.content
+            ?: raw?.get("sni")?.jsonPrimitive?.content
         val path = raw?.get("path")?.jsonPrimitive?.content ?: "/"
+        val mode = raw?.get("mode")?.jsonPrimitive?.content ?: "auto"
 
         return buildJsonObject {
+            put("mode", JsonPrimitive(mode))
             put("path", JsonPrimitive(path))
-            // XHTTP host is an array
             if (host != null) {
-                put("host", buildJsonArray { add(JsonPrimitive(host)) })
+                put("host", JsonPrimitive(host))
             }
         }
     }
@@ -763,20 +781,6 @@ object XrayConfigParser {
         return buildJsonObject {
             put("serviceName", JsonPrimitive(serviceName))
             put("multiMode", JsonPrimitive(false))
-        }
-    }
-
-    private fun buildQuicSettings(config: ServerConfig): JsonObject {
-        val raw = parseRawConfig(config.rawConfig)
-        val security = raw?.get("quicSecurity")?.jsonPrimitive?.content ?: "none"
-        val key = raw?.get("key")?.jsonPrimitive?.content ?: ""
-
-        return buildJsonObject {
-            put("security", JsonPrimitive(security))
-            put("key", JsonPrimitive(key))
-            put("header", buildJsonObject {
-                put("type", JsonPrimitive("none"))
-            })
         }
     }
 

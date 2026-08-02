@@ -353,23 +353,54 @@ class XrayConfigParserTest {
     }
 
     @Test
-    fun `QUIC transport never fragments even with fragment enabled`() {
-        // Regression guard for the TLS-fragment corruption: QUIC (and UDP
-        // h3) must stay pristine — the fragment-out only ever applies to
-        // TCP/TLS ClientHellos, never to QUIC transport.
+    fun `QUIC transport migrates to XHTTP H3 in Xray 26`() {
+        // Xray 26 removed network:"quic" → migrated to XHTTP (stream-one H3).
+        // A Transport.QUIC config must compile to network:"xhttp" with
+        // xhttpSettings, never to the rejected "quic" network.
         val config = ServerConfig(
             name = "Test", address = "test.example.com", port = 443,
             protocol = Protocol.VLESS, transport = Transport.QUIC,
             security = Security.None,
-            rawConfig = "\"\"\"{\"id\":\"x\",\"encryption\":\"none\"}\"\"\"",
+            rawConfig = """{"id":"x","encryption":"none","host":"h3.example.com","path":"/xhttp","mode":"auto"}""",
             engineFormat = EngineFormat.XrayJson
         )
         val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes, fragmentTls = true))
-        val outbounds = root["outbounds"]!!.jsonArray!!
-        assertTrue("no fragment-out for QUIC", outbounds.none { it.jsonObject["tag"]?.jsonPrimitive?.content == "fragment-out" })
-        val proxy = outbounds.first { it.jsonObject["tag"]!!.jsonPrimitive.content == "proxy" }.jsonObject
-        val sockopt = proxy["streamSettings"]!!.jsonObject["sockopt"]!!.jsonObject
-        assertNull("no dialerProxy for QUIC", sockopt["dialerProxy"])
+        val proxy = root["outbounds"]!!.jsonArray.first { it.jsonObject["tag"]?.jsonPrimitive?.content == "proxy" }.jsonObject
+        val ss = proxy["streamSettings"]!!.jsonObject
+        // Migrated to XHTTP H3, NOT the removed "quic" network.
+        assertEquals("xhttp", ss["network"]!!.jsonPrimitive.content)
+        assertNull("no quicSettings", ss["quicSettings"])
+        val xhttp = ss["xhttpSettings"]!!.jsonObject
+        assertEquals("auto", xhttp["mode"]!!.jsonPrimitive.content)
+        assertEquals("/xhttp", xhttp["path"]!!.jsonPrimitive.content)
+        // Xray 26 host is a STRING (array rejected).
+        assertEquals("h3.example.com", xhttp["host"]!!.jsonPrimitive.content)
+        // H3 (UDP) must never get a fragment-out / dialerProxy.
+        assertTrue(
+            "no fragment-out for H3",
+            root["outbounds"]!!.jsonArray.none { it.jsonObject["tag"]?.jsonPrimitive?.content == "fragment-out" }
+        )
+        assertNull("no dialerProxy for H3", ss["sockopt"]!!.jsonObject["dialerProxy"])
+    }
+
+    @Test
+    fun `XHTTP host is a string not an array`() {
+        // Regression: Xray 26 SplitHTTPConfig rejects an array host.
+        val config = ServerConfig(
+            name = "Test", address = "xhttp.example.com", port = 443,
+            protocol = Protocol.VLESS, transport = Transport.XHTTP,
+            security = Security.TLS,
+            rawConfig = """{"id":"x","encryption":"none","host":"xhttp.example.com","path":"/","serverName":"xhttp.example.com","mode":"auto"}""",
+            engineFormat = EngineFormat.XrayJson
+        )
+        val root = parseObj(XrayConfigParser.toXrayJson(config, dns, routes))
+        val outbound = root["outbounds"]!!.jsonArray.first { it.jsonObject["tag"]?.jsonPrimitive?.content == "proxy" }.jsonObject
+        val xhttp = outbound["streamSettings"]!!.jsonObject["xhttpSettings"]!!.jsonObject
+        assertTrue(
+            "host must be a plain string (not array)",
+            xhttp["host"]!! is JsonPrimitive && xhttp["host"]!!.jsonPrimitive.isString
+        )
+        assertEquals("xhttp.example.com", xhttp["host"]!!.jsonPrimitive.content)
     }
 
     @Test

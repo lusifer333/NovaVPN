@@ -9,13 +9,16 @@ import com.novavpn.domain.model.Subscription
 import com.novavpn.domain.probe.MineCapacity
 import com.novavpn.domain.probe.ProfileServers
 import com.novavpn.domain.probe.ProbeOptions
+import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
-import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.usecase.server.SelectServerUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +63,13 @@ class ProfilesViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(ProfilesUiState())
     val state: StateFlow<ProfilesUiState> = _state.asStateFlow()
+
+    /** The active fill coroutine, held so the user can stopFill() it. */
+    private var fillJob: Job? = null
+
+    /** Debounced mine persister; null while idle. */
+    private var persistJob: Job? = null
+    @Volatile private var latestMine: List<ServerConfig>? = null
 
     init {
         // Profiles = enabled subscriptions that have servers. Expand state
@@ -129,6 +139,11 @@ class ProfilesViewModel @Inject constructor(
      * the fill stops the moment the mine is full. Per-profile shares are
      * respected.
      *
+     * The partial mine is persisted INCREMENTALLY (debounced) via [onMine] —
+     * NOT just at the end — so the healthy relays gathered so far survive a
+     * force-kill or user stop. [stopFill] cancels the held [Job] and the
+     * accumulated partial mine is flushed to DataStore.
+     *
      * Runs entirely off the main thread:
      * - the engine sessions are chunked (≤100 outbounds per session, see
      *   [MineFiller.CHUNK_SIZE]) so Android's ~1024 RLIMIT_NOFILE is never
@@ -145,37 +160,97 @@ class ProfilesViewModel @Inject constructor(
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return
 
         _state.update { it.copy(isFilling = true, mine = emptyList(), results = emptyMap()) }
-        viewModelScope.launch(Dispatchers.Default) {
-            val settings = settingsRepository.get()
-            val options = ProbeOptions(
-                fragmentTls = settings.enableTlsFragment,
-                keepAlive = settings.enableTcpKeepAlive
-            )
-            val pending = LinkedHashMap<String, ServerProbeResult>()
-            var lastEmitMs = 0L
-            fun flushBatch() {
-                if (pending.isEmpty()) return
-                val batch = pending.toMap()
-                pending.clear()
-                lastEmitMs = System.currentTimeMillis()
-                _state.update { it.copy(results = it.results + batch) }
-            }
+        fillJob?.cancel()
+        latestMine = null
+        persistJob?.cancel()
+        persistJob = null
+        fillJob = viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val settings = settingsRepository.get()
+                val options = ProbeOptions(
+                    fragmentTls = settings.enableTlsFragment,
+                    keepAlive = settings.enableTcpKeepAlive
+                )
+                val pending = LinkedHashMap<String, ServerProbeResult>()
+                var lastEmitMs = 0L
+                fun flushBatch() {
+                    if (pending.isEmpty()) return
+                    val batch = pending.toMap()
+                    pending.clear()
+                    lastEmitMs = System.currentTimeMillis()
+                    _state.update { it.copy(results = it.results + batch) }
+                }
 
-            val result = fillMineUseCase(
-                profiles = profiles,
-                options = options,
-                previousMine = current.mine,
-                onResult = { res ->
-                    if (res.serverId.isNotBlank()) {
-                        pending[res.serverId] = res
-                        if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
+                val result = fillMineUseCase(
+                    profiles = profiles,
+                    options = options,
+                    previousMine = current.mine,
+                    onResult = { res ->
+                        if (res.serverId.isNotBlank()) {
+                            pending[res.serverId] = res
+                            if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
+                        }
+                    },
+                    onMine = { mine ->
+                        _state.update { it.copy(mine = mine) }
+                        // Persist the growing mine (debounced, off this thread)
+                        // so a force-kill or user stop never loses what we have.
+                        latestMine = mine
+                        if (persistJob == null) {
+                            persistJob = viewModelScope.launch { persistLoop() }
+                        }
                     }
-                },
-                onMine = { mine -> _state.update { it.copy(mine = mine) } }
-            )
-            flushBatch()
-            mineRepository.save(result.mine)
-            _state.update { it.copy(isFilling = false, mine = result.mine, results = result.results) }
+                )
+                flushBatch()
+                // Final authoritative persist.
+                mineRepository.save(result.mine)
+                persistJob?.cancel()
+                persistJob = null
+                _state.update { it.copy(isFilling = false, mine = result.mine, results = result.results) }
+            } catch (e: CancellationException) {
+                // Plain stop — persist whatever we already had and mark idle.
+                persistFlushAndIdle()
+                throw e
+            } finally {
+                _state.update { it.copy(isFilling = false) }
+            }
         }
+    }
+
+    /**
+     * لغو/توقف پر کردن معدن — the partial mine (relays found so far) is
+     * flushed to DataStore so nothing gathered is lost.
+     */
+    fun stopFill() {
+        val job = fillJob ?: return
+        fillJob = null
+        job.cancel()
+        persistFlushAndIdle()
+    }
+
+    /** Persist the latest mine and mark the fill idle (used on stop / cancel). */
+    private fun persistFlushAndIdle() {
+        val mine = _state.value.mine
+        if (mine.isNotEmpty()) {
+            viewModelScope.launch {
+                try {
+                    mineRepository.save(mine)
+                } catch (_: Exception) {
+                    // persistence must never crash the VM on teardown
+                }
+            }
+        }
+        _state.update { it.copy(isFilling = false) }
+    }
+
+    /** Continuously drains [latestMine] to DataStore until it stabilises, then stops. */
+    private suspend fun persistLoop() {
+        while (true) {
+            val mine = latestMine ?: break
+            runCatching { mineRepository.save(mine) }
+            delay(300)
+            if (latestMine == mine) break   // stable for a full save → stop
+        }
+        persistJob = null
     }
 }

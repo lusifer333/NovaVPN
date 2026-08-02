@@ -51,6 +51,7 @@ fun ProfilesScreen(
                 MineSection(
                     state = state,
                     onFillMine = viewModel::fillMine,
+                    onStopFill = viewModel::stopFill,
                     onSelect = viewModel::selectServer
                 )
             }
@@ -121,6 +122,7 @@ fun ProfilesScreen(
 private fun MineSection(
     state: ProfilesUiState,
     onFillMine: () -> Unit,
+    onStopFill: () -> Unit,
     onSelect: (ServerConfig) -> Unit
 ) {
     Card(
@@ -161,16 +163,21 @@ private fun MineSection(
                     Text("Test All Servers")
                 }
                 Button(
-                    onClick = onFillMine,
-                    enabled = !state.isFilling && state.profiles.isNotEmpty()
+                    onClick = if (state.isFilling) onStopFill else onFillMine,
+                    colors = if (state.isFilling) {
+                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    }
                 ) {
                     if (state.isFilling) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Filling...")
+                        Text("Stop")
                     } else {
                         Text("Fill Mine")
                     }
