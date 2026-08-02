@@ -81,6 +81,11 @@ class NovaVpnService : VpnService() {
     private var engineStarted = false
     private var bridgeStarted = false
 
+    /** True while we're legitimately cancelling an old session to switch servers
+     *  (re-connect / auto switch) — suppresses the spurious "Connection
+     *  cancelled" error during that teardown. */
+    @Volatile private var reconnectRequested = false
+
     companion object {
         const val ACTION_START = "com.novavpn.action.START_VPN"
         const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
@@ -180,7 +185,19 @@ class NovaVpnService : VpnService() {
      *   are all cleaned up before the mutex is released.
      */
     private fun startVpnInternal(config: ServerConfig?) {
+        // Cancel any in-flight connection job FIRST so it releases the mutex
+        // (its atomicTeardown runs in the cancelled job's finally block) and a
+        // new connection isn't blocked forever waiting on connectMutex. Without
+        // this, a second tap while a session holds the mutex in holdConnection()
+        // would sit stuck in Connecting forever (P1).
+        val prevJob = connectionJob
+        if (prevJob != null && prevJob.isActive) {
+            Timber.tag(TAG).i("[VpnLifecycle] Cancelling previous connection job before re-connect")
+            reconnectRequested = true
+            prevJob.cancel()
+        }
         connectionJob = serviceScope.launch {
+            reconnectRequested = false
             connectMutex.withLock {
                 try {
                     ensureActive()
@@ -223,8 +240,10 @@ class NovaVpnService : VpnService() {
                     atomicTeardown()
                 } catch (e: CancellationException) {
                     Timber.tag(TAG).w("[VpnLifecycle] CONNECT_CANCELLED: %s", e.message)
-                    connectUseCase.updateState(VpnState.Error("Connection cancelled"))
-                    updateNotification("Cancelled")
+                    if (!reconnectRequested) {
+                        connectUseCase.updateState(VpnState.Error("Connection cancelled"))
+                        updateNotification("Cancelled")
+                    }
                     throw e
                 } catch (e: Exception) {
                     Timber.tag(TAG).e(e, "[VpnLifecycle] CONNECT_FAILED: %s", e.message)

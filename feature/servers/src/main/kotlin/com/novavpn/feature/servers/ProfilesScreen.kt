@@ -109,6 +109,7 @@ fun ProfilesScreen(
                                 probeResult = state.results[server.id],
                                 onTap = { viewModel.selectServer(server) },
                                 onProbe = { viewModel.probeServer(server) },
+                                showProbeButton = true,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -196,6 +197,7 @@ private fun MineSection(
                         probeResult = state.results[server.id],
                         onTap = { onSelect(server) },
                         onProbe = { onProbe(server) },
+                        showProbeButton = true,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
