@@ -111,10 +111,11 @@ class MineFillerTest {
             val id = firstArg<String>()
             if (id == "s5") {
                 delay(500) // slowest relay: loses the race to the mine
+                RealDelayOutcome(true, 500)
             } else {
                 val ms = id.removePrefix("s").toLong() // s1→1, s2→2, s3→3
+                RealDelayOutcome(true, ms)
             }
-            RealDelayOutcome(true, if (id == "s5") 500 else ms)
         }
         coEvery { e2e.stop() } returns Unit
         val filler = MineFiller(e2e)
