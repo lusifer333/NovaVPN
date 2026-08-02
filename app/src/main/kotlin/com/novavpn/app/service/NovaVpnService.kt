@@ -248,8 +248,18 @@ class NovaVpnService : VpnService() {
                         // job. Keep the service alive (stopService=false) — stopSelf()
                         // would trigger onDestroy → serviceScope.cancel(), killing
                         // the new connection job. Don't emit a spurious error.
+                        //
+                        // MUST run in NonCancellable: this catch fires because the
+                        // coroutine was cancelled, so every suspend call here
+                        // (tunnelBridge.stop / engine.stop) would otherwise throw
+                        // CancellationException instantly, the bridge would never
+                        // actually stop, and the NEXT connect hits "Tunnel already
+                        // running" (proved from device log). NonCancellable lets the
+                        // teardown run to completion.
                         try {
-                            atomicTeardown(stopService = false)
+                            withContext(NonCancellable) {
+                                atomicTeardown(stopService = false)
+                            }
                         } catch (te: Exception) {
                             Timber.tag(TAG).w(te, "[VpnLifecycle] teardown during reconnect failed: %s", te.message)
                         }
