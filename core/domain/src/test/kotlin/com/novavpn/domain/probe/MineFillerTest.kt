@@ -375,7 +375,7 @@ class MineFillerTest {
             assertEquals(3, r.mine.size)
             assertEquals(setOf("a", "b", "c"), r.mine.map { it.id }.toSet())
             // All seeds refreshed by a live probe — not trusted from memory.
-            coVerify(exactly = 1) { e2e.probe(any()) }
+            coVerify(exactly = 3) { e2e.probe(any()) }
         }
     }
 }
