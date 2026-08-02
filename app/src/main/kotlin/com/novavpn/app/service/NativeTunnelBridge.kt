@@ -158,6 +158,30 @@ class NativeTunnelBridge @Inject constructor(
             Timber.tag(TAG).e(e, "nativeStopTunnel threw: %s", e.message)
         }
 
+        // ── CRITICAL: nativeStopTunnel() is asynchronous. A subsequent
+        // reconnect/switch that calls start() before the old tunnel is fully
+        // down hits 'if (isRunning) → Tunnel already running' and fails, which
+        // surfaces as a red connect button after a server switch. Poll until
+        // nativeGetTunnelRunning() reports false (bounded) before returning.
+        var stillRunning = false
+        var waited = 0
+        do {
+            stillRunning = try {
+                NativeBridgeRunner.nativeGetTunnelRunning()
+            } catch (_: Exception) {
+                false
+            }
+            if (stillRunning) {
+                runCatching { Thread.sleep(50) }
+                waited += 50
+            }
+        } while (stillRunning && waited < 3_000)
+        if (stillRunning) {
+            Timber.tag(TAG).w("Tunnel still running after %d ms of polling — continuing anyway", waited)
+        } else {
+            Timber.tag(TAG).i("Tunnel fully stopped after %d ms wait", waited)
+        }
+
         // Check tunnel state after stop
         val running = try {
             NativeBridgeRunner.nativeGetTunnelRunning()
