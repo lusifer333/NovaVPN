@@ -41,13 +41,19 @@ data class MineFillResult(
  *     across a probe batch ([probeParallelism], default 100).
  *  2. Real-delay relay probe through the actual engine — only for the
  *     greens of the current batch, as a bounded wave ([e2eParallelism],
- *     default 3 engines).
+ *     default 3).
  *  3. A config enters the mine only when BOTH stages passed.
+ *
+ * Stage 3 uses Karing/sing-box urltest semantics: ONE shared engine
+ * session ([RealDelayProber.start]) carries every candidate server, and
+ * each probe is a REAL HTTP round-trip (https://www.gstatic.com/generate_204
+ * → 204) through that server's tunnel — a server that doesn't actually
+ * relay traffic can never pass.
  *
  * Profiles are processed in order; each profile's proportional share (see
  * [MineCapacity]) is filled before moving to the next profile. The whole
  * run stops the moment the mine is full. A dead server costs one fast
- * probe; only greens pay the expensive engine round-trip.
+ * probe; only greens pay the engine round-trip.
  *
  * Pure JVM — [RealDelayProber] is injected (fake in unit tests, real
  * engine implementation on device).
@@ -76,68 +82,98 @@ class MineFiller(
         onMine: (List<ServerConfig>) -> Unit = {}
     ): MineFillResult {
         val totalServers = profiles.sumOf { it.servers.size }
-        if (totalServers <= 0) return MineFillResult(emptyList(), emptyMap())
-
-        val capacity = MineCapacity.capacityOf(totalServers)
-        val results = mutableMapOf<String, ServerProbeResult>()
-        val mine = mutableListOf<ServerConfig>()
-        val mineIds = mutableSetOf<String>()
-        val filledByProfile = mutableMapOf<String, Int>()
-        val e2eSemaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
-
-        profileLoop@ for (profile in profiles) {
-            if (profile.servers.isEmpty()) continue
-            if (mine.size >= capacity) break
-            val share = MineCapacity.profileShare(
-                capacity = capacity,
-                totalServers = totalServers,
-                profileServers = profile.servers.size
-            )
-            if (share <= 0) continue
-
-            for (batch in profile.servers.chunked(probeParallelism.coerceAtLeast(1))) {
-                val profileFilled = filledByProfile[profile.profileId] ?: 0
-                if (mine.size >= capacity || profileFilled >= share) break
-
-                // ── Stage 1+2: merged probes across the batch, parallel ──
-                val batchOutcomes = coroutineScope {
-                    batch.map { server ->
-                        async { prober.fastTlsProbe(server) }
-                    }.map { it.await() }
+        val allServers = profiles.flatMap { it.servers }
+        var engineStarted = false
+        try {
+            // One shared engine session for the whole fill run — Karing-style:
+            // a single instance carrying every candidate as an outbound, so
+            // stage 3 spawns zero extra processes (fast, no phone freeze).
+            if (totalServers > 0) {
+                engineStarted = try {
+                    realDelayProber.start(allServers)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
                 }
-                val greens = mutableListOf<Pair<ServerConfig, ServerProbeResult>>()
-                for ((server, result) in batch.zip(batchOutcomes)) {
-                    results[result.serverId] = result
-                    onResult(result)
-                    if (result.green) greens += server to result
-                }
-                if (greens.isEmpty()) continue
+            }
+            if (totalServers <= 0) return MineFillResult(emptyList(), emptyMap())
 
-                // ── Stage 3: real-delay wave on the greens, early-stop ──
-                val wave = e2eWave(
-                    greens = greens,
-                    semaphore = e2eSemaphore,
-                    mine = mine,
-                    mineIds = mineIds,
+            val capacity = MineCapacity.capacityOf(totalServers)
+            val results = mutableMapOf<String, ServerProbeResult>()
+            val mine = mutableListOf<ServerConfig>()
+            val mineIds = mutableSetOf<String>()
+            val filledByProfile = mutableMapOf<String, Int>()
+            val e2eSemaphore = Semaphore(e2eParallelism.coerceAtLeast(1))
+
+            profileLoop@ for (profile in profiles) {
+                if (profile.servers.isEmpty()) continue
+                if (mine.size >= capacity) break
+                val share = MineCapacity.profileShare(
                     capacity = capacity,
-                    profileId = profile.profileId,
-                    share = share,
-                    filledByProfile = filledByProfile,
-                    results = results,
-                    onResult = onResult,
-                    onMine = onMine
+                    totalServers = totalServers,
+                    profileServers = profile.servers.size
                 )
-                if (wave) continue@profileLoop
+                if (share <= 0) continue
+
+                for (batch in profile.servers.chunked(probeParallelism.coerceAtLeast(1))) {
+                    val profileFilled = filledByProfile[profile.profileId] ?: 0
+                    if (mine.size >= capacity || profileFilled >= share) break
+
+                    // ── Stage 1+2: merged probes across the batch, parallel ──
+                    val batchOutcomes = coroutineScope {
+                        batch.map { server ->
+                            async { prober.fastTlsProbe(server) }
+                        }.map { it.await() }
+                    }
+                    val greens = mutableListOf<Pair<ServerConfig, ServerProbeResult>>()
+                    for ((server, result) in batch.zip(batchOutcomes)) {
+                        results[result.serverId] = result
+                        onResult(result)
+                        if (result.green) greens += server to result
+                    }
+                    if (greens.isEmpty()) continue
+
+                    // ── Stage 3: real-delay wave on the greens, early-stop ──
+                    val wave = e2eWave(
+                        greens = greens,
+                        semaphore = e2eSemaphore,
+                        engineUp = engineStarted,
+                        mine = mine,
+                        mineIds = mineIds,
+                        capacity = capacity,
+                        profileId = profile.profileId,
+                        share = share,
+                        filledByProfile = filledByProfile,
+                        results = results,
+                        onResult = onResult,
+                        onMine = onMine
+                    )
+                    if (wave) continue@profileLoop
+                }
+            }
+
+            // Best-first: sorted by real delay (ascending), green-only.
+            val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
+            return MineFillResult(sorted, results)
+        } finally {
+            // Always tear the shared session down — a fill run must never
+            // leave a probe xray running on the phone.
+            if (engineStarted) {
+                try {
+                    realDelayProber.stop()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // engine stop must never mask the fill result
+                }
             }
         }
-
-        // Best-first: sorted by real delay (ascending), green-only.
-        val sorted = mine.sortedBy { results[it.id]?.e2eMs ?: Long.MAX_VALUE }
-        return MineFillResult(sorted, results)
     }
 
     /**
      * Runs real-delay probes for the batch's greens as a bounded wave.
+     *
      * Results are consumed in COMPLETION order (fastest relay first), so
      * the mine fills best-first while the wave still runs; early-stop is
      * preserved. Returns true when this profile's share (or the whole
@@ -146,6 +182,7 @@ class MineFiller(
     private suspend fun e2eWave(
         greens: List<Pair<ServerConfig, ServerProbeResult>>,
         semaphore: Semaphore,
+        engineUp: Boolean,
         mine: MutableList<ServerConfig>,
         mineIds: MutableSet<String>,
         capacity: Int,
@@ -158,7 +195,14 @@ class MineFiller(
     ): Boolean = coroutineScope {
         val deferreds = greens.map { (server, base) ->
             async {
-                val outcome = semaphore.withPermit { realDelayProber.probe(server) }
+                // No engine session → nothing can pass stage 3 (no false
+                // positives): the mine stays empty rather than filling
+                // with handshake-only servers.
+                val outcome = if (engineUp) {
+                    semaphore.withPermit { realDelayProber.probe(server.id) }
+                } else {
+                    RealDelayOutcome(false)
+                }
                 server to base.copy(e2eOk = outcome.ok, e2eMs = outcome.e2eMs)
             }
         }

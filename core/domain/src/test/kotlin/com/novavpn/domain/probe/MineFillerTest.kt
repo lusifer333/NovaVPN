@@ -35,12 +35,15 @@ class MineFillerTest {
         return p
     }
 
+    /** E2E prober whose session always starts; probe outcome per server id. */
     private fun e2eOf(okIds: Set<String>): RealDelayProber {
         val p = mockk<RealDelayProber>()
+        coEvery { p.start(any()) } returns true
         coEvery { p.probe(any()) } answers {
-            val s = firstArg<ServerConfig>()
-            if (s.id in okIds) RealDelayOutcome(true, 120) else RealDelayOutcome(false)
+            val id = firstArg<String>()
+            if (id in okIds) RealDelayOutcome(true, 120) else RealDelayOutcome(false)
         }
+        coEvery { p.stop() } just Runs
         return p
     }
 
@@ -139,8 +142,9 @@ class MineFillerTest {
             green(firstArg<ServerConfig>().id)
         }
         val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any()) } returns true
         coEvery { e2e.probe(any()) } coAnswers {
-            val id = firstArg<ServerConfig>().id
+            val id = firstArg<String>()
             if (id == "s5") {
                 delay(500) // slowest relay: loses the race to the mine
                 RealDelayOutcome(true, 500)
@@ -149,6 +153,7 @@ class MineFillerTest {
                 RealDelayOutcome(true, ms)
             }
         }
+        coEvery { e2e.stop() } just Runs
         val filler = MineFiller(prober, e2e)
         runBlocking {
             val r = filler.fill(
@@ -170,5 +175,33 @@ class MineFillerTest {
             assertEquals(0, r.mine.size)
             assertTrue(r.results.isEmpty())
         }
+    }
+
+    @Test
+    fun `engine start failure admits nobody - no false positives`() {
+        // The shared Karing-style session could not boot → stage 3 is
+        // unavailable, and handshake-only servers must NOT fill the mine.
+        val e2e = mockk<RealDelayProber>()
+        coEvery { e2e.start(any()) } returns false
+        coEvery { e2e.probe(any()) } returns RealDelayOutcome(false)
+        coEvery { e2e.stop() } just Runs
+        val filler = MineFiller(proberOf(greens = setOf("a", "b")), e2e)
+        runBlocking {
+            val r = filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a"), server("b")))))
+            assertEquals(0, r.mine.size)
+            assertTrue(r.results.values.none { it.healthy })
+        }
+        coVerify(exactly = 0) { e2e.probe(any()) }
+    }
+
+    @Test
+    fun `engine session starts once with all candidates and stops after fill`() {
+        val e2e = e2eOf(okIds = setOf("a"))
+        val filler = MineFiller(proberOf(greens = setOf("a")), e2e)
+        runBlocking {
+            filler.fill(listOf(ProfileServers("p1", "P1", listOf(server("a")))))
+        }
+        coVerify(exactly = 1) { e2e.start(any()) }
+        coVerify(exactly = 1) { e2e.stop() }
     }
 }

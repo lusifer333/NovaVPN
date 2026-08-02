@@ -103,6 +103,73 @@ object XrayConfigParser {
         return jsonStr
     }
 
+    /**
+     * Karing-style urltest harness config: ONE xray instance that tests
+     * every candidate server in parallel.
+     *
+     * Each candidate gets its own SOCKS5 inbound (`basePort + index`) whose
+     * routing rule pins it to that server's outbound — so the mine filler
+     * probes server #i by dialing 127.0.0.1:(basePort+i) and the test
+     * request actually RELAYS through server #i. This mirrors sing-box's
+     * `urltest` outbound (many outbounds in one core, each tested with a
+     * real HTTP round-trip): one process, zero per-server spawn churn.
+     *
+     * @param servers candidate servers; each becomes one outbound (tag
+     *   `probe-out-<i>`) and one socks inbound (tag `probe-in-<i>`).
+     * @param basePort first probe inbound port; port i sits at basePort + i.
+     * @param logDir when non-null, xray writes debug access/error logs there.
+     */
+    fun buildMineConfig(
+        servers: List<ServerConfig>,
+        basePort: Int,
+        logDir: String? = null
+    ): String {
+        val root = buildJsonObject {
+            put("log", buildLogSection(logDir))
+            put("inbounds", buildJsonArray {
+                servers.forEachIndexed { i, _ ->
+                    add(buildJsonObject {
+                        put("listen", JsonPrimitive("127.0.0.1"))
+                        put("port", basePort + i)
+                        put("protocol", JsonPrimitive("socks"))
+                        put("settings", buildJsonObject {
+                            put("auth", JsonPrimitive("noauth"))
+                            put("udp", JsonPrimitive(false))
+                        })
+                        put("tag", JsonPrimitive("probe-in-$i"))
+                    })
+                }
+            })
+            put("outbounds", buildJsonArray {
+                servers.forEachIndexed { i, server ->
+                    add(buildProxyOutbound(server, fragmentTls = false, tag = "probe-out-$i"))
+                }
+                add(buildDirectOutbound())
+                add(buildBlockOutbound())
+            })
+            put("routing", buildJsonObject {
+                put("domainStrategy", JsonPrimitive("AsIs"))
+                put("rules", buildJsonArray {
+                    servers.forEachIndexed { i, _ ->
+                        add(buildJsonObject {
+                            put("type", JsonPrimitive("field"))
+                            put("inboundTag", buildJsonArray { add(JsonPrimitive("probe-in-$i")) })
+                            put("outboundTag", JsonPrimitive("probe-out-$i"))
+                        })
+                    }
+                    // Catch-all: anything unexpected (stray packet, sniffed
+                    // leak) goes direct instead of looping or dying.
+                    add(buildJsonObject {
+                        put("type", JsonPrimitive("field"))
+                        put("network", JsonPrimitive("tcp,udp"))
+                        put("outboundTag", JsonPrimitive("direct"))
+                    })
+                })
+            })
+        }
+        return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
+    }
+
     // ------------------------------------------------------------------
     // Log section
     // ------------------------------------------------------------------
@@ -200,8 +267,8 @@ object XrayConfigParser {
      * Build the main proxy outbound from the server configuration.
      * Dispatches to protocol-specific builders.
      */
-    private fun buildProxyOutbound(config: ServerConfig, fragmentTls: Boolean = false): JsonObject = buildJsonObject {
-        put("tag", JsonPrimitive("proxy"))
+    private fun buildProxyOutbound(config: ServerConfig, fragmentTls: Boolean = false, tag: String = "proxy"): JsonObject = buildJsonObject {
+        put("tag", JsonPrimitive(tag))
 
         when (config.protocol) {
             Protocol.VMess -> {
