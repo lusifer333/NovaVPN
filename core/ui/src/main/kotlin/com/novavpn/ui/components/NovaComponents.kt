@@ -242,6 +242,8 @@ fun ServerListItem(
     }
 }
 
+}
+
 /**
  * Subscription list item.
  */
