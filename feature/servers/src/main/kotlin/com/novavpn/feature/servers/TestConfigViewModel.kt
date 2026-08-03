@@ -79,7 +79,7 @@ class TestConfigViewModel @Inject constructor(
         viewModelScope.launch {
             val s = settingsRepository.get()
             val persisted = testResultRepository.get()
-            val servers = serverRepository.observeSelectable().first()
+            val servers = serverRepository.observeAll().first()
             val restored = persisted.mapNotNull { entry ->
                 val server = servers.firstOrNull { it.id == entry.serverId } ?: return@mapNotNull null
                 TestResultRow(server, entry.ok, entry.e2eMs)
@@ -104,17 +104,17 @@ class TestConfigViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setUrlTestTimeout(seconds) }
     }
 
-    /** Test ALL selectable servers with the chosen URL + timeout. */
+    /** Test ALL servers (every subscription, enabled or not) with the chosen URL + timeout. */
     fun testAll() {
         if (_state.value.isTesting) return
         viewModelScope.launch {
             val subscriptions = subscriptionRepository.observeAll().first()
-            val servers = serverRepository.observeSelectable().first()
+            val servers = serverRepository.observeAll().first()
             if (subscriptions.isEmpty() || servers.isEmpty()) return@launch
 
             val bySubscription = servers.groupBy { it.subscriptionId }
             val profiles = subscriptions
-                .filter { it.isEnabled && bySubscription.containsKey(it.id) }
+                .filter { bySubscription.containsKey(it.id) }
                 .map { ProfileServers(it.id, it.name, bySubscription[it.id].orEmpty()) }
             if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return@launch
 
@@ -133,31 +133,41 @@ class TestConfigViewModel @Inject constructor(
             testJob?.cancel()
             testJob = viewModelScope.launch(Dispatchers.Default) {
                 try {
+                    // Live results are batched (100ms) so a large list never
+                    // thrashes the UI thread with one recomposition per probe.
+                    val pending = LinkedHashMap<String, TestResultRow>()
+                    var lastEmitMs = 0L
+                    var tested = 0
+                    fun flushBatch() {
+                        if (pending.isEmpty()) return
+                        val batch = pending.toMap()
+                        pending.clear()
+                        lastEmitMs = System.currentTimeMillis()
+                        _state.update { st ->
+                            var results = st.results
+                            // A failed re-test removes the server from the list
+                            // entirely (request); only healthy pings keep a row.
+                            batch.forEach { (id, row) ->
+                                results = if (row.ok) results + (id to row) else results - id
+                            }
+                            st.copy(results = results, testedCount = tested)
+                        }
+                    }
                     fillMineUseCase(
                         profiles = profiles,
                         options = options,
                         previousMine = mineRepository.get(),
                         onResult = { res: ServerProbeResult ->
-                            _state.update { st ->
-                                val server = servers.firstOrNull { it.id == res.serverId }
-                                if (server == null) return@update st
-                                val results = if (res.e2eOk) {
-                                    // Healthy → keep/update the row.
-                                    st.results + (res.serverId to TestResultRow(server, true, res.e2eMs))
-                                } else {
-                                    // Re-test FAILED → drop this server from the
-                                    // list entirely (request: a server stays only
-                                    // while re-pings succeed; a negative re-ping
-                                    // removes it — it does NOT linger as ✗).
-                                    st.results - res.serverId
-                                }
-                                st.copy(
-                                    results = results,
-                                    testedCount = st.testedCount + 1
-                                )
-                            }
+                            val server = servers.firstOrNull { it.id == res.serverId }
+                            if (server == null) return@onResult
+                            tested++
+                            // Buffer every probe; the batch decides ok→add,
+                            // fail→remove at flush time.
+                            pending[res.serverId] = TestResultRow(server, res.e2eOk, res.e2eMs)
+                            if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
                         }
                     )
+                    flushBatch()
                     persistResults()
                 } catch (e: CancellationException) {
                     throw e

@@ -188,6 +188,21 @@ private fun MineSection(
                 }
             }
 
+            // ── Fill progress: tested / total ──
+            if (state.isFilling && state.totalCount > 0) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { state.testedCount.toFloat() / state.totalCount.toFloat() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Tested ${state.testedCount} / ${state.totalCount}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             if (state.mine.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 state.mine.forEach { server ->

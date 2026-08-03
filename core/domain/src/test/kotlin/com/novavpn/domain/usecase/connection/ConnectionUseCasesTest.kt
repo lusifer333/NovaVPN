@@ -23,9 +23,6 @@ class ConnectUseCaseTest {
     @MockK
     private lateinit var serverRepo: ServerRepository
 
-    @MockK
-    private lateinit var getBestServer: com.novavpn.domain.usecase.server.GetBestServerUseCase
-
     private lateinit var connectUseCase: ConnectUseCase
 
     private val enabledServer = ServerConfig(
@@ -43,7 +40,7 @@ class ConnectUseCaseTest {
     @Before
     fun setUp() {
         MockKAnnotations.init(this, relaxed = true)
-        connectUseCase = ConnectUseCase(getBestServer, serverRepo)
+        connectUseCase = ConnectUseCase(serverRepo)
     }
 
     @Test
@@ -112,9 +109,6 @@ class ObserveConnectionStateUseCaseTest {
     @MockK
     private lateinit var serverRepo: ServerRepository
 
-    @MockK
-    private lateinit var getBestServer: com.novavpn.domain.usecase.server.GetBestServerUseCase
-
     @Before
     fun setUp() {
         MockKAnnotations.init(this, relaxed = true)
@@ -122,7 +116,7 @@ class ObserveConnectionStateUseCaseTest {
 
     @Test
     fun `observeConnectionState emits state changes`() = runTest {
-        val connectUseCase = ConnectUseCase(getBestServer, serverRepo)
+        val connectUseCase = ConnectUseCase(serverRepo)
         val observer = ObserveConnectionStateUseCase(connectUseCase)
 
         val initial = observer.invoke().value

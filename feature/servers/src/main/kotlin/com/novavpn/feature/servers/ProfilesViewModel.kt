@@ -46,7 +46,10 @@ data class ProfilesUiState(
     val mineCapacity: Int = 0,
     val results: Map<String, ServerProbeResult> = emptyMap(),
     val isFilling: Boolean = false,
-    val selectedServerId: String? = null
+    val selectedServerId: String? = null,
+    /** Fill progress: how many servers have been tested so far / in total. */
+    val testedCount: Int = 0,
+    val totalCount: Int = 0
 )
 
 /**
@@ -231,7 +234,14 @@ class ProfilesViewModel @Inject constructor(
         }
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return
 
-        _state.update { it.copy(isFilling = true, mine = emptyList()) }
+        _state.update {
+            it.copy(
+                isFilling = true,
+                mine = emptyList(),
+                testedCount = 0,
+                totalCount = profiles.sumOf { p -> p.servers.size }
+            )
+        }
         fillJob?.cancel()
         latestMine = null
         persistJob?.cancel()
@@ -260,6 +270,8 @@ class ProfilesViewModel @Inject constructor(
                     onResult = { res ->
                         if (res.serverId.isNotBlank()) {
                             pending[res.serverId] = res
+                            // Live progress: count every probed server.
+                            _state.update { it.copy(testedCount = it.testedCount + 1) }
                             if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
                         }
                     },

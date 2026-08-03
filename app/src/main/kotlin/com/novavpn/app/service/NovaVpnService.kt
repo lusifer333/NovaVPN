@@ -18,7 +18,6 @@ import com.novavpn.domain.model.TunDiagnostics
 import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.engine.api.EngineContext
-import com.novavpn.engine.api.EngineError
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.xray.XrayEngine
 import dagger.hilt.android.AndroidEntryPoint
@@ -63,17 +62,11 @@ class NovaVpnService : VpnService() {
     @Inject lateinit var serverRepository: com.novavpn.domain.repository.ServerRepository
     @Inject lateinit var settingsRepository: com.novavpn.domain.repository.SettingsRepository
     @Inject lateinit var subscriptionRepository: com.novavpn.domain.repository.SubscriptionRepository
-    @Inject lateinit var realDelayProber: com.novavpn.domain.probe.RealDelayProber
     @Inject lateinit var tunnelBridge: NativeTunnelBridge
 
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
     private var tunName: String = ""
-
-    /** When the session runs in BALANCED (auto-connect) mode, the full list
-     *  of enabled-subscription servers given to the in-core balancer. The
-     *  balancer's picked outbound (bal-out-N) maps to [n] of this list. */
-    @Volatile private var sessionBalancedServers: List<ServerConfig>? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectionJob: Job? = null
@@ -105,9 +98,6 @@ class NovaVpnService : VpnService() {
         const val EXTRA_CONFIG_ID = "extra_server_id"
         private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
         private const val TAG = "NovaVpnService"
-        /** Auto-connect urltest polling interval (Karing tests continuously;
-         *  10s is a good battery/accuracy balance for device switching). */
-        private const val URLTEST_INTERVAL_MS = 10_000L
     }
 
     override fun onCreate() {
@@ -380,40 +370,7 @@ class NovaVpnService : VpnService() {
             appSettings.enableTcpKeepAlive, appSettings.enableFakeDns
         )
 
-        // ── BALANCED (auto-connect) mode: in-core leastping urltest ──
-        // When Auto Connect is ON and the chosen server's subscription is
-        // enabled, start the engine with ALL enabled-subscription servers in a
-        // leastping balancer (Xray observatory pings each with a real HTTP
-        // request and routes every connection to the fastest ALIVE one — the
-        // native Xray 26 equivalent of Karing's sing-box urltest). Servers of
-        // DISABLED subscriptions are excluded, so the balancer can never pick
-        // them. The engine publishes the currently-picked outbound on
-        // [XrayEngine.activeOutboundTag]; the session watcher maps it back to a
-        // ServerConfig so Home shows the server actually in use.
-        val balancedList = if (appSettings.enableAutoConnect) {
-            val enabledServers = serverRepository.observeSelectable().first()
-                .filter { it.protocol != com.novavpn.domain.model.Protocol.Unknown }
-            if (enabledServers.size >= 2) enabledServers else null
-        } else null
-
-        val startResult = if (balancedList != null) {
-            Timber.tag(TAG).i(
-                "LIFECYCLE: BALANCED_START %d servers (auto-connect, enabled subs only)",
-                balancedList.size
-            )
-            sessionBalancedServers = balancedList
-            (engine as? XrayEngine)?.startBalanced(
-                servers = balancedList,
-                probeUrl = appSettings.urlTestUrl,
-                probeIntervalMs = URLTEST_INTERVAL_MS,
-                probeTimeoutMs = appSettings.urlTestTimeoutSec * 1000
-            ) ?: Result.failure(EngineError(EngineError.ErrorCode.ENGINE_CRASH, "Engine is not Xray"))
-        } else {
-            sessionBalancedServers = null
-            engine.start(cfg)
-        }
-
-        startResult.onFailure { error ->
+        engine.start(cfg).onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
             connectUseCase.updateState(VpnState.Error(error.message ?: "Start failed"))
             updateNotification("Start failed"); return
@@ -536,32 +493,6 @@ class NovaVpnService : VpnService() {
                 }
             }
 
-            // ── Auto-connect urltest loop (Karing-style, v0.17.0) ──
-            // While Connected, periodically rank the current profile group's
-            // servers with a REAL HTTP round-trip (same settings as the real
-            // connect) and switch to the fastest healthy one — without dropping
-            // the VPN (reuses the proven startVpnInternal switch path). Runs as a
-            // child of this session scope so it lives/dies with the connection.
-            //
-            // SKIPPED when running a BALANCED session: in that mode the engine's
-            // in-core observatory/leastping already tests every server and routes
-            // to the fastest ALIVE one continuously — an external loop would
-            // fight the engine with redundant reconnects.
-            if (settingsRepository.get().enableAutoConnect && sessionBalancedServers == null) {
-                launch { runUrltestLoop() }
-            }
-
-            // ── In-core balancer pick watcher (v0.17.4) ──
-            // When the session runs a balanced config (auto-connect ON), the
-            // Xray observatory/leastping balancer picks the fastest ALIVE
-            // server continuously, IN the engine. Reflect that pick in the UI
-            // (connectUseCase.currentServer + last-connected) so Home shows the
-            // server actually carrying traffic — even when the engine switches
-            // servers internally without a reconnect.
-            if (sessionBalancedServers != null) {
-                launch { watchBalancedPick() }
-            }
-
             // ── TUN health monitor (runs as long as the connection is alive) ──
             startTunHealthMonitor(engine)
 
@@ -582,98 +513,6 @@ class NovaVpnService : VpnService() {
     // ------------------------------------------------------------------
     // Karing-style auto-connect urltest loop
     // ------------------------------------------------------------------
-
-    /**
-     * Periodic urltest of the current profile group while the VPN is Connected.
-     *
-     * Karing parity: the core continuously tests every server in the group with
-     * a REAL HTTP round-trip and routes to the best. Xray has no urltest
-     * outbound, so we approximate it here: every [URLTEST_INTERVAL_MS] we probe
-     * the group's servers through the existing [realDelayProber] (same settings
-     * as the real connect), pick the fastest healthy one, and switch to it via
-     * the proven [startVpnInternal] path — the VPN never drops because that path
-     * is the fixed in-place switch. The loop is a child of the session scope, so
-     * disconnect cancels it. Skips silently when the best server == current.
-     */
-    private suspend fun runUrltestLoop() {
-        Timber.tag(TAG).i("[Urltest] Loop started (interval=%ds, autoConnect)",
-            URLTEST_INTERVAL_MS / 1000)
-        while (currentCoroutineContext().isActive) {
-            try {
-                // Re-read settings each cycle so disabling Auto Connect stops the loop.
-                val settings = settingsRepository.get()
-                if (!settings.enableAutoConnect) return
-
-                delay(URLTEST_INTERVAL_MS)
-                if (connectUseCase.connectionState.value != VpnState.Connected) return
-
-                val current = currentConfig ?: return
-                if (current.protocol == com.novavpn.domain.model.Protocol.Unknown) continue
-
-                // Same group = same subscription as the current server.
-                val groupServers = serverRepository.observeSelectable().first()
-                    .filter { it.subscriptionId == current.subscriptionId && it.protocol != com.novavpn.domain.model.Protocol.Unknown }
-                if (groupServers.size < 2) continue
-
-                val options = com.novavpn.domain.probe.ProbeOptions(
-                    fragmentTls = settings.enableTlsFragment,
-                    keepAlive = settings.enableTcpKeepAlive,
-                    url = settings.urlTestUrl,
-                    timeoutMs = settings.urlTestTimeoutSec * 1000
-                )
-                val started = realDelayProber.start(groupServers, options)
-                if (!started) continue
-                try {
-                    // Probe all, pick lowest healthy latency.
-                    val best = groupServers
-                        .map { it to realDelayProber.probe(it.id) }
-                        .filter { it.second.ok }
-                        .minByOrNull { it.second.e2eMs ?: Long.MAX_VALUE }
-
-                    if (best != null && best.first.id != current.id && best.first.id.isNotBlank()) {
-                        val target = serverRepository.getById(best.first.id) ?: continue
-                        Timber.tag(TAG).i(
-                            "[Urtest] switching %s→%s (best healthy, %dms)",
-                            current.name, target.name, best.second.e2eMs ?: -1
-                        )
-                        startVpnInternal(target)
-                    }
-                } finally {
-                    realDelayProber.stop()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "[Urtest] cycle failed: %s", e.message)
-                // continue loop on transient failure
-            }
-        }
-    }
-
-    /**
-     * Watch the in-core balancer's current outbound pick and mirror it to the
-     * UI. The Xray engine publishes [XrayEngine.activeOutboundTag] (parsed
-     * from its error log, "taking platform initialized detour [bal-out-N]");
-     * we map tag index → server and update connectUseCase + last-connected.
-     */
-    private suspend fun watchBalancedPick() {
-        val engine = engineManager.activeEngine as? com.novavpn.engine.xray.XrayEngine ?: return
-        Timber.tag(TAG).i("[Balanced] Pick watcher started")
-        engine.activeOutboundTag.collect { tag ->
-            if (tag == null) return@collect
-            val index = tag.removePrefix("bal-out-").toIntOrNull() ?: return@collect
-            val servers = sessionBalancedServers ?: return@collect
-            val picked = servers.getOrNull(index) ?: return@collect
-            if (picked.id != connectUseCase.currentServerId) {
-                Timber.tag(TAG).i("[Balanced] in-core pick → %s (%s)", picked.name, tag)
-                connectUseCase.updateCurrentServer(picked)
-                // Persist as last-connected so other screens highlight it too.
-                try {
-                    serverRepository.setLastConnected(picked.id)
-                } catch (_: Exception) { }
-            }
-        }
-    }
 
     // ------------------------------------------------------------------
     // Health monitoring

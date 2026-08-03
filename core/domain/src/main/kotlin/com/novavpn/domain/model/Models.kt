@@ -249,18 +249,13 @@ data class AppSettings(
     val enablePerAppVpn: Boolean = false,
     val enableSplitTunnel: Boolean = false,
     val enableAlwaysOnVpn: Boolean = false,
-    val enableAutoConnect: Boolean = false,
-    val enableAutoStart: Boolean = false,
     val enableNotifications: Boolean = true,
     // Karing-style urltest config-test settings (v0.17.0).
     // urlTestUrl: the reachability URL the config test hits; default is
     // Karing's first/default test URL (gstatic /generate_204).
     // urlTestTimeoutSec: 1..15s (Karing's url_test_timeout range).
-    // autoConnectAfterLaunch: connect automatically after the app opens
-    // (Karing auto_connect_after_launch, default true).
     val urlTestUrl: String = "https://www.gstatic.com/generate_204",
     val urlTestTimeoutSec: Int = 15,
-    val autoConnectAfterLaunch: Boolean = true,
     val theme: ThemeMode = ThemeMode.System,
     val language: String = "system",
     // 0 = pre-migration (no marker persisted yet). Existing JSON without this

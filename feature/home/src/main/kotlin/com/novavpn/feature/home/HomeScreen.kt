@@ -169,12 +169,6 @@ fun HomeScreen(
                     modifier = Modifier.weight(1f)
                 )
                 AssistChip(
-                    onClick = { viewModel.autoConnectToBest() },
-                    label = { Text("Auto Connect") },
-                    leadingIcon = { Icon(Icons.Default.Timeline, contentDescription = null, Modifier.size(18.dp)) },
-                    modifier = Modifier.weight(1f)
-                )
-                AssistChip(
                     onClick = onNavigateToTestConfigs,
                     label = { Text("Test Configs") },
                     leadingIcon = { Icon(Icons.Default.Speed, contentDescription = null, Modifier.size(18.dp)) },

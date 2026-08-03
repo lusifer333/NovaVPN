@@ -40,10 +40,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setCustomDns(dns) }
     }
 
-    fun setAutoConnect(enabled: Boolean) {
-        viewModelScope.launch { settingsRepository.setAutoConnect(enabled) }
-    }
-
     fun setTheme(theme: ThemeMode) {
         viewModelScope.launch {
             settingsRepository.update(_state.value.settings.copy(theme = theme))

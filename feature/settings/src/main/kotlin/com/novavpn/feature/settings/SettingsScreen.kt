@@ -49,13 +49,6 @@ fun SettingsScreen(
             )
 
             SettingsSwitchItem(
-                title = "Auto Connect",
-                subtitle = "Automatically connect to best server",
-                checked = settings.enableAutoConnect,
-                onCheckedChange = { viewModel.setAutoConnect(it) }
-            )
-
-            SettingsSwitchItem(
                 title = "Always-On VPN",
                 subtitle = "Keep VPN active when possible",
                 checked = settings.enableAlwaysOnVpn,

@@ -34,10 +34,6 @@ class SettingsRepositoryImpl @Inject constructor(
         dataStore.updateData { current -> current.copy(customDns = dns) }
     }
 
-    override suspend fun setAutoConnect(enabled: Boolean) {
-        dataStore.updateData { current -> current.copy(enableAutoConnect = enabled) }
-    }
-
     override suspend fun setUrlTestUrl(url: String) {
         dataStore.updateData { current -> current.copy(urlTestUrl = url) }
     }

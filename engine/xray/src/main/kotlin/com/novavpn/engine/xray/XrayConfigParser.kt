@@ -4,7 +4,6 @@ import com.novavpn.domain.model.Protocol
 import com.novavpn.domain.model.Security
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.Transport
-import com.novavpn.domain.probe.KaringTestUrls
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -181,105 +180,6 @@ object XrayConfigParser {
                         put("type", JsonPrimitive("field"))
                         put("network", JsonPrimitive("tcp,udp"))
                         put("outboundTag", JsonPrimitive("direct"))
-                    })
-                })
-            })
-        }
-        return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), root)
-    }
-
-    // ------------------------------------------------------------------
-    // Log section
-    // ------------------------------------------------------------------
-
-    /**
-     * Build a Karing-style AUTO-CONNECT (balancer) runtime config.
-     *
-     * Unlike [toXrayJson] (exactly one outbound), this config carries ALL
-     * candidate servers as outbounds (tags `bal-out-<i>`), an `observatory`
-     * (burst health ping — REAL HTTP probe, exactly like sing-box urltest)
-     * and a `routing.balancers` leastping group (tag `bal-0`) that selects
-     * the fastest ALIVE server continuously, in-core. The SOCKS inbound
-     * routes to the balancer, so every connection automatically goes to the
-     * best currently-healthy server — no external polling, no engine restart
-     * on switch. This is the native Xray 26 equivalent of Karing's
-     * sing-box urltest outbound (proved working on 26.3.27: dead outbounds
-     * are marked dead by the observatory and traffic routes to the alive one).
-     *
-     * @param servers candidate servers; each becomes outbound `bal-out-<i>`.
-     * @param logDir when non-null, debug logs (access + error) are written
-     *        there — REQUIRED for active-outbound detection: the access log
-     *        carries `taking platform initialized detour [bal-out-N]`.
-     * @param probeUrl the observatory health-check URL (Karing urlTest).
-     * @param probeIntervalMs how often the observatory re-pings (Karing
-     *        tests continuously; 10s is the loop default elsewhere).
-     * @param probeTimeoutMs per-attempt health-ping timeout.
-     * @param fragmentTls apply TLS fragmentation to eligible outbounds.
-     * @param keepAlive client TCP keepalive sockopt on outbounds.
-     */
-    fun buildBalancerConfig(
-        servers: List<ServerConfig>,
-        logDir: String? = null,
-        probeUrl: String = KaringTestUrls.defaultTestUrl,
-        probeIntervalMs: Long = 10_000L,
-        probeTimeoutMs: Int = 3_500,
-        fragmentTls: Boolean = false,
-        keepAlive: Boolean = true
-    ): String {
-        val root = buildJsonObject {
-            put("log", buildLogSection(logDir))
-            put("inbounds", buildJsonArray {
-                add(buildJsonObject {
-                    put("listen", JsonPrimitive("127.0.0.1"))
-                    put("port", 10808)
-                    put("protocol", JsonPrimitive("socks"))
-                    put("settings", buildJsonObject {
-                        put("auth", JsonPrimitive("noauth"))
-                        put("udp", JsonPrimitive(true))
-                    })
-                    put("tag", JsonPrimitive("socks-in"))
-                    put("sniffing", buildSniffing(includeQuic = false))
-                })
-            })
-            put("outbounds", buildJsonArray {
-                if (servers.any { fragmentEligible(it, fragmentTls) }) {
-                    add(buildFragmentOutbound())
-                }
-                servers.forEachIndexed { i, server ->
-                    add(buildProxyOutbound(server, fragmentTls, keepAlive, tag = "bal-out-$i"))
-                }
-                add(buildDirectOutbound())
-                add(buildBlockOutbound())
-            })
-            // In-core health ping — the native Xray 26 urltest.
-            put("observatory", buildJsonObject {
-                put("subjectSelector", buildJsonArray { add(JsonPrimitive("bal-out-")) })
-                put("probeURL", JsonPrimitive(probeUrl))
-                put("probeInterval", JsonPrimitive("${probeIntervalMs}ms"))
-                put("enableConcurrency", JsonPrimitive(true))
-            })
-            put("routing", buildJsonObject {
-                put("domainStrategy", JsonPrimitive("AsIs"))
-                put("rules", buildJsonArray {
-                    add(buildJsonObject {
-                        put("type", JsonPrimitive("field"))
-                        put("inboundTag", buildJsonArray { add(JsonPrimitive("socks-in")) })
-                        put("balancerTag", JsonPrimitive("bal-0"))
-                    })
-                    // Catch-all: unexpected traffic goes direct, never loops.
-                    add(buildJsonObject {
-                        put("type", JsonPrimitive("field"))
-                        put("network", JsonPrimitive("tcp,udp"))
-                        put("outboundTag", JsonPrimitive("direct"))
-                    })
-                })
-                put("balancers", buildJsonArray {
-                    add(buildJsonObject {
-                        put("tag", JsonPrimitive("bal-0"))
-                        put("selector", buildJsonArray { add(JsonPrimitive("bal-out-")) })
-                        put("strategy", buildJsonObject {
-                            put("type", JsonPrimitive("leastping"))
-                        })
                     })
                 })
             })

@@ -57,7 +57,7 @@ fun TestConfigScreen(
             // ── Test URL picker ──
             item {
                 Text(
-                    text = "Test URL (Karing defaults)",
+                    text = "Test URL",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )

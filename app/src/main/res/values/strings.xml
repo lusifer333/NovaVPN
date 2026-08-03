@@ -18,7 +18,6 @@
     <string name="import_from_clipboard">Import from Clipboard</string>
     <string name="import_from_qr">Scan QR Code</string>
     <string name="import_from_file">Import from File</string>
-    <string name="auto_connect">Auto Connect</string>
     <string name="vpn_permission_required">VPN permission is required</string>
     <string name="grant_permission">Grant Permission</string>
     <string name="notification_channel_name">NovaVPN Service</string>

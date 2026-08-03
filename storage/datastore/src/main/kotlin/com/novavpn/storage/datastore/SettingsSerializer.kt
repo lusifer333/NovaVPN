@@ -52,16 +52,14 @@ object SettingsSerializer : Serializer<AppSettings> {
                 enableTlsFragment = false,
                 enableTcpKeepAlive = false, // was true → off
                 enableIPv6 = false,         // was true → off
-                enableAutoConnect = false,  // was true → off
-                enableAutoStart = false,    // was true → off
                 settingsVersion = 1
             )
         }
         // v2 (v0.17.0): Karing-style config-test settings.
         // Newly added fields decode to their defaults for pre-v2 data, so no
         // overlay is strictly needed — but stamp 2 so future v3 moves are
-        // unambiguous. urlTestUrl/urlTestTimeoutSec/autoConnectAfterLaunch all
-        // keep their default values (defaults are the desired ones here).
+        // unambiguous. urlTestUrl/urlTestTimeoutSec keep their default values
+        // (defaults are the desired ones here).
         if (s.settingsVersion < 2) {
             s = s.copy(
                 settingsVersion = 2

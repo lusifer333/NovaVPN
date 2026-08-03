@@ -121,9 +121,6 @@ interface SettingsRepository {
     /** Update DNS setting. */
     suspend fun setCustomDns(dns: String)
 
-    /** Update auto-connect preference. */
-    suspend fun setAutoConnect(enabled: Boolean)
-
     /** Update the Karing-style config-test reachability URL. */
     suspend fun setUrlTestUrl(url: String)
 
