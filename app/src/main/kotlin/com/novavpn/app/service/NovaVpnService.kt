@@ -542,7 +542,7 @@ class NovaVpnService : VpnService() {
     private suspend fun runUrltestLoop() {
         Timber.tag(TAG).i("[Urltest] Loop started (interval=%ds, autoConnect)",
             URLTEST_INTERVAL_MS / 1000)
-        while (isActive) {
+        while (currentCoroutineContext().isActive) {
             try {
                 // Re-read settings each cycle so disabling Auto Connect stops the loop.
                 val settings = settingsRepository.get()
