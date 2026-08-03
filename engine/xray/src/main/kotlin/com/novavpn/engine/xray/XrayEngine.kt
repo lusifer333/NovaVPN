@@ -11,6 +11,7 @@ import com.novavpn.engine.api.Engine
 import com.novavpn.engine.api.EngineContext
 import com.novavpn.engine.api.EngineError
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
