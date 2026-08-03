@@ -450,28 +450,35 @@ class NovaVpnService : VpnService() {
         // applied to a fresh config/engine immediately. coroutineScope keeps the
         // watcher exactly as long as this session; cancelling the connection job
         // cancels the watcher too.
+        //
+        // NOTE: we capture the session's own immutable `config` argument (NOT the
+        // service's mutable `currentConfig` field) and guard with an in-flight flag.
+        // `currentConfig` is nulled by atomicTeardown, so reading it from a second
+        // watcher emission that races the reconnect teardown yielded null → the
+        // reconnect job failed with "no server config". The flag also collapses a
+        // burst of rapid toggle changes (e.g. Block QUIC + TLS flipped together)
+        // into a single reconnect.
+        var reconnectInFlight = false
         coroutineScope {
             launch {
                 var last = settingsRepository.get()
                 settingsRepository.observe().collect { s ->
-                    val shapingChanged = s.enableBlockQuic != last.enableBlockQuic ||
-                        s.enableTlsFragment != last.enableTlsFragment ||
-                        s.enableTcpKeepAlive != last.enableTcpKeepAlive ||
-                        s.enableFakeDns != last.enableFakeDns
+                    val shapingChanged = !reconnectInFlight &&
+                        (s.enableBlockQuic != last.enableBlockQuic ||
+                         s.enableTlsFragment != last.enableTlsFragment ||
+                         s.enableTcpKeepAlive != last.enableTcpKeepAlive ||
+                         s.enableFakeDns != last.enableFakeDns)
                     if (shapingChanged &&
                         connectUseCase.connectionState.value == VpnState.Connected) {
+                        reconnectInFlight = true
+                        connectUseCase.updateState(VpnState.Connecting)
                         Timber.tag(TAG).i(
                             "[VpnLifecycle] Connection-shaping setting changed → reconnecting to apply (blockQuic=%b tls=%b keepAlive=%b fakeDns=%b)",
                             s.enableBlockQuic, s.enableTlsFragment, s.enableTcpKeepAlive, s.enableFakeDns
                         )
-                        // startVpnInternal, NOT reconnect(): reconnect() wraps
-                        // stopVpn() which would cancel us, then launch a fallback
-                        // mutex-acquire and treat the teardown as a user stop
-                        // (stopSelf / 'Connection cancelled'). startVpnInternal
-                        // marks reconnectRequested=true, cancels the previous active
-                        // job (that includes this watcher), and relaunches under
-                        // the correct switch path.
-                        startVpnInternal(currentConfig)
+                        // Use the session's OWN `config`, never the global mutable
+                        // `currentConfig` (nulled by teardown) — see NOTE above.
+                        startVpnInternal(config)
                     }
                     last = s
                 }
