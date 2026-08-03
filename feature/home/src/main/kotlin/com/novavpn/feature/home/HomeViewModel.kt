@@ -21,14 +21,23 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
+ * A single active config-parameter badge shown on Home.
+ *
+ * @param letter single-letter minimal label (F = TLS Fragment, Q = Block
+ *   QUIC, K = TCP Keep-Alive, D = FakeDNS).
+ * @param label full parameter name (accessibility/contentDescription).
+ */
+data class ConfigBadge(
+    val letter: String,
+    val label: String
+)
+
+/**
  * Single atomic UI state.
  *
  * [vpnState] is a [VpnState] sealed interface that carries error
  * messages internally via [VpnState.Error.message] — no separate
  * [errorMessage] field that can fall out of sync.
- *
- * Button text and visibility are derived from [vpnState] in the
- * composable layer, never from independent booleans.
  */
 data class HomeUiState(
     val vpnState: VpnState = VpnState.Disconnected,
@@ -36,7 +45,10 @@ data class HomeUiState(
     val selectedServer: ServerConfig? = null,
     val serverList: List<ServerConfig> = emptyList(),
     val stats: ConnectionStats = ConnectionStats(),
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    /** Minimal letter badges for the ACTIVE connection-shaping params
+     *  (only populated while Connected). */
+    val activeBadges: List<ConfigBadge> = emptyList()
 )
 
 @HiltViewModel
@@ -55,19 +67,34 @@ class HomeViewModel @Inject constructor(
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
     init {
-        // Observe connection state — single source of truth from the service
+        // Observe connection state — single source of truth from the service —
+        // combined with the settings so the ACTIVE config-parameter badges stay
+        // in sync with what the engine is actually running (read from the same
+        // SettingsRepository the service consumes at connect time).
         viewModelScope.launch {
-            observeConnectionState().collect { vpnState ->
+            combine(
+                observeConnectionState(),
+                settingsRepository.observe()
+            ) { vpnState, settings ->
                 val currentServer = if (vpnState is VpnState.Connected) {
                     connectUseCase.currentServerId?.let { id -> serverRepository.getById(id) }
                 } else null
+                val badges = if (vpnState == VpnState.Connected) {
+                    buildList {
+                        if (settings.enableBlockQuic) add(ConfigBadge("Q", "Block QUIC"))
+                        if (settings.enableTlsFragment) add(ConfigBadge("F", "TLS Fragment"))
+                        if (settings.enableTcpKeepAlive) add(ConfigBadge("K", "TCP Keep-Alive"))
+                        if (settings.enableFakeDns) add(ConfigBadge("D", "FakeDNS"))
+                    }
+                } else emptyList()
                 _state.update {
                     it.copy(
                         vpnState = vpnState,
-                        currentServer = currentServer
+                        currentServer = currentServer,
+                        activeBadges = badges
                     )
                 }
-            }
+            }.collect {}
         }
 
         // Observe selectable servers
@@ -166,9 +193,14 @@ class HomeViewModel @Inject constructor(
             .map { ProfileServers(it.id, it.name, bySubscription[it.id].orEmpty()) }
         if (profiles.isEmpty() || profiles.sumOf { it.servers.size } == 0) return null
 
-        // Plain, lightweight probe just to pick the fastest *reachable* relay —
-        // not influenced by connection toggles (TLS fragment / TCP keepalive).
-        val options = ProbeOptions()
+        // Probe with the SAME connection-shaping settings the real connect will
+        // apply — a server probed plain can be marked healthy and then fail the
+        // real connect when TLS Fragment / TCP Keep-Alive are ON (v0.16.30).
+        val settings = settingsRepository.get()
+        val options = ProbeOptions(
+            fragmentTls = settings.enableTlsFragment,
+            keepAlive = settings.enableTcpKeepAlive
+        )
         val result = fillMineUseCase(profiles, options, previousMine = mineRepository.get())
         return result.mine.firstOrNull()
     }

@@ -76,6 +76,7 @@ fun HomeScreen(
                     "${it.name} (${it.protocol.displayName})"
                 } ?: "No server selected",
                 serverAddress = displayServer?.let { "${it.address}:${it.port}" } ?: "",
+                activeBadges = state.activeBadges,
                 isLoading = state.isLoading,
                 onConnect = {
                     // Check VPN permission before connecting
@@ -221,6 +222,7 @@ private fun ConnectionCard(
     vpnState: VpnState,
     serverName: String,
     serverAddress: String,
+    activeBadges: List<ConfigBadge>,
     isLoading: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit
@@ -324,6 +326,34 @@ private fun ConnectionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+
+            // Active config-parameter badges — minimal single-letter circles
+            // (F = TLS Fragment, Q = Block QUIC, K = TCP Keep-Alive, D = FakeDNS).
+            if (activeBadges.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    activeBadges.forEach { badge ->
+                        Surface(
+                            modifier = Modifier.size(26.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = badge.letter,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             if (serverAddress.isNotBlank() && !isConnected) {
                 Text(
