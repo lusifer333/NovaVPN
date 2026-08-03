@@ -167,6 +167,19 @@ abstract class DataModule {
 
         @Provides
         @Singleton
+        fun provideTestResultDataStore(
+            @ApplicationContext context: Context,
+            serializer: TestResultSerializer
+        ): DataStore<List<TestResultEntry>> {
+            return DataStoreFactory.create(
+                serializer = serializer
+            ) {
+                java.io.File(context.filesDir, "novavpn_test_results.json")
+            }
+        }
+
+        @Provides
+        @Singleton
         fun provideAppSettingsDataStore(
             @ApplicationContext context: Context,
             serializer: SettingsSerializer
