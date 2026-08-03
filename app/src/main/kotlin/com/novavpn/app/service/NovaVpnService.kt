@@ -86,6 +86,11 @@ class NovaVpnService : VpnService() {
      *  cancelled" error during that teardown. */
     @Volatile private var reconnectRequested = false
 
+    /** Honors the "Notifications" settings toggle. When off, the foreground
+     *  notification (which Android REQUIRES for a running VPN service) is kept
+     *  minimal & silent and status text updates are suppressed. */
+    @Volatile private var notificationsEnabled = true
+
     companion object {
         const val ACTION_START = "com.novavpn.action.START_VPN"
         const val ACTION_STOP = "com.novavpn.action.STOP_VPN"
@@ -97,6 +102,14 @@ class NovaVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Honor the "Notifications" toggle: Android forces a foreground
+        // notification for the running VPN service, so when the user disabled
+        // notifications we still post the mandatory minimal silent one. The
+        // setting is read async (DataStore flow) and applied on first emission.
+        serviceScope.launch {
+            val s = settingsRepository.observe().first()
+            notificationsEnabled = s.enableNotifications
+        }
         startForeground(NovaConfig.NOTIFICATION_ID, createNotification("Starting…"))
     }
 
@@ -429,17 +442,53 @@ class NovaVpnService : VpnService() {
      * startVpnInternal() which handles it with proper teardown.
      */
     private suspend fun holdConnection(engine: com.novavpn.engine.api.Engine, config: ServerConfig) {
-        // ── TUN health monitor (runs as long as the connection is alive) ──
-        startTunHealthMonitor(engine)
+        // ── LIVE settings re-apply (request: settings toggles take effect
+        // immediately, no app restart required) ──
+        // Watch the config-shaping toggles (Block QUIC / TLS Fragment /
+        // TCP Keep-Alive / FakeDNS). When any changes while the VPN is running,
+        // reconnect via the SAME server-switch mechanism so the new setting is
+        // applied to a fresh config/engine immediately. coroutineScope keeps the
+        // watcher exactly as long as this session; cancelling the connection job
+        // cancels the watcher too.
+        coroutineScope {
+            launch {
+                var last = settingsRepository.get()
+                settingsRepository.observe().collect { s ->
+                    val shapingChanged = s.enableBlockQuic != last.enableBlockQuic ||
+                        s.enableTlsFragment != last.enableTlsFragment ||
+                        s.enableTcpKeepAlive != last.enableTcpKeepAlive ||
+                        s.enableFakeDns != last.enableFakeDns
+                    if (shapingChanged &&
+                        connectUseCase.connectionState.value == VpnState.Connected) {
+                        Timber.tag(TAG).i(
+                            "[VpnLifecycle] Connection-shaping setting changed → reconnecting to apply (blockQuic=%b tls=%b keepAlive=%b fakeDns=%b)",
+                            s.enableBlockQuic, s.enableTlsFragment, s.enableTcpKeepAlive, s.enableFakeDns
+                        )
+                        // startVpnInternal, NOT reconnect(): reconnect() wraps
+                        // stopVpn() which would cancel us, then launch a fallback
+                        // mutex-acquire and treat the teardown as a user stop
+                        // (stopSelf / 'Connection cancelled'). startVpnInternal
+                        // marks reconnectRequested=true, cancels the previous active
+                        // job (that includes this watcher), and relaunches under
+                        // the correct switch path.
+                        startVpnInternal(currentConfig)
+                    }
+                    last = s
+                }
+            }
 
-        engine.state.collect { state ->
-            if (state == EngineRuntimeState.Crashed
-                && connectUseCase.connectionState.value == VpnState.Connected) {
-                connectUseCase.updateState(VpnState.Error("Engine crashed — reconnecting"))
-                updateNotification("Reconnecting…")
-                engine.restart(config).onSuccess {
-                    connectUseCase.updateState(VpnState.Connected)
-                    updateNotification("Connected")
+            // ── TUN health monitor (runs as long as the connection is alive) ──
+            startTunHealthMonitor(engine)
+
+            engine.state.collect { state ->
+                if (state == EngineRuntimeState.Crashed
+                    && connectUseCase.connectionState.value == VpnState.Connected) {
+                    connectUseCase.updateState(VpnState.Error("Engine crashed — reconnecting"))
+                    updateNotification("Reconnecting…")
+                    engine.restart(config).onSuccess {
+                        connectUseCase.updateState(VpnState.Connected)
+                        updateNotification("Connected")
+                    }
                 }
             }
         }
@@ -767,6 +816,18 @@ class NovaVpnService : VpnService() {
     }
 
     private fun createNotification(text: String): Notification {
+        if (!notificationsEnabled) {
+            // Mandatory foreground notification when the user disabled the
+            // "Notifications" toggle: minimal & silent header only, never
+            // updated with status text.
+            return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setContentTitle("NovaVPN")
+                .setContentText(getString(R.string.app_name))
+                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setOngoing(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_MIN).build()
+        }
         val pi = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
@@ -777,6 +838,7 @@ class NovaVpnService : VpnService() {
     }
 
     private fun updateNotification(text: String) {
+        if (!notificationsEnabled) return   // user turned notifications off
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NovaConfig.NOTIFICATION_ID, createNotification(text))
     }

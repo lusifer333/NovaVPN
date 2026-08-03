@@ -59,7 +59,8 @@ fun SettingsScreen(
                 title = "Always-On VPN",
                 subtitle = "Keep VPN active when possible",
                 checked = settings.enableAlwaysOnVpn,
-                onCheckedChange = { viewModel.setAlwaysOn(it) }
+                onCheckedChange = { /* not yet implemented in core */ },
+                enabled = false
             )
 
             Divider(modifier = Modifier.padding(vertical = 4.dp))
@@ -67,21 +68,33 @@ fun SettingsScreen(
             // Network section
             SettingsSectionHeader("Network")
 
+            val dnsEnabled = false   // Custom DNS not yet wired into the engine
             OutlinedTextField(
                 value = settings.customDns,
-                onValueChange = { viewModel.setCustomDns(it) },
+                onValueChange = {},
+                enabled = dnsEnabled,
                 label = { Text("Custom DNS") },
                 placeholder = { Text("e.g. 8.8.8.8") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                colors = if (dnsEnabled) OutlinedTextFieldDefaults.colors()
+                         else OutlinedTextFieldDefaults.colors(
+                             focusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                             unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                             focusedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                             unfocusedTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                             focusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                         )
             )
 
             SettingsSwitchItem(
                 title = "IPv6",
                 subtitle = "Enable IPv6 support",
                 checked = settings.enableIPv6,
-                onCheckedChange = { viewModel.setIPv6(it) }
+                onCheckedChange = { /* not yet implemented in core */ },
+                enabled = false
             )
 
             SettingsSwitchItem(
@@ -121,7 +134,8 @@ fun SettingsScreen(
                 title = "Per-App VPN",
                 subtitle = "Select which apps use VPN",
                 checked = settings.enablePerAppVpn,
-                onCheckedChange = { viewModel.setPerAppVpn(it) }
+                onCheckedChange = { /* not yet implemented in core */ },
+                enabled = false
             )
 
             Divider(modifier = Modifier.padding(vertical = 4.dp))
@@ -211,8 +225,12 @@ private fun SettingsSwitchItem(
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
+    // Un-implemented settings (no core backing) render greyed-out + disabled so
+    // users see at a glance that they do nothing yet.
+    val contentAlpha = if (enabled) 1f else 0.45f
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -225,11 +243,12 @@ private fun SettingsSwitchItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha))
                 Text(text = subtitle, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha))
             }
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
+            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
         }
     }
 }

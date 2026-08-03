@@ -23,14 +23,38 @@ object SettingsSerializer : Serializer<AppSettings> {
     override val defaultValue: AppSettings = AppSettings()
 
     override suspend fun readFrom(input: InputStream): AppSettings {
-        return try {
-            json.decodeFromString(
+        var decoded: AppSettings
+        try {
+            decoded = json.decodeFromString(
                 AppSettings.serializer(),
                 input.readBytes().decodeToString()
             )
         } catch (e: SerializationException) {
             throw CorruptionException("Cannot read AppSettings", e)
         }
+        return migrate(decoded)
+    }
+
+    /**
+     * One-time migration of stored settings to the current defaults.
+     * Because [Json.encodeDefaults] is true, every field is persisted, so a
+     * field whose default just changed (e.g. `enableBlockQuic` → true in
+     * v0.16.27) keeps its OLD stored value for existing installs. We tag each
+     * write with [AppSettings.settingsVersion]; a value below 1 means the data
+     * predates this migration, so we overlay the new defaults onto the four
+     * toggles whose default changed and record version 1.
+     */
+    private fun migrate(current: AppSettings): AppSettings {
+        if (current.settingsVersion >= 1) return current
+        return current.copy(
+            enableBlockQuic = true,     // was false → BLOCK QUIC now on by default
+            enableTlsFragment = false,
+            enableTcpKeepAlive = false, // was true → off
+            enableIPv6 = false,         // was true → off
+            enableAutoConnect = false,  // was true → off
+            enableAutoStart = false,    // was true → off
+            settingsVersion = 1
+        )
     }
 
     override suspend fun writeTo(t: AppSettings, output: OutputStream) {

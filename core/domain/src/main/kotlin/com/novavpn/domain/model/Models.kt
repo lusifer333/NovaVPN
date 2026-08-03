@@ -242,18 +242,22 @@ data class AppSettings(
     val selectedEngine: EngineType = EngineType.Xray,
     val customDns: String = "",
     val enableFakeDns: Boolean = false,
-    val enableBlockQuic: Boolean = false,
+    val enableBlockQuic: Boolean = true,
     val enableTlsFragment: Boolean = false,
-    val enableTcpKeepAlive: Boolean = true,
-    val enableIPv6: Boolean = true,
+    val enableTcpKeepAlive: Boolean = false,
+    val enableIPv6: Boolean = false,
     val enablePerAppVpn: Boolean = false,
     val enableSplitTunnel: Boolean = false,
     val enableAlwaysOnVpn: Boolean = false,
-    val enableAutoConnect: Boolean = true,
-    val enableAutoStart: Boolean = true,
+    val enableAutoConnect: Boolean = false,
+    val enableAutoStart: Boolean = false,
     val enableNotifications: Boolean = true,
     val theme: ThemeMode = ThemeMode.System,
-    val language: String = "system"
+    val language: String = "system",
+    // 0 = pre-migration (no marker persisted yet). Existing JSON without this
+    // field decodes to 0, so the one-time default migration in
+    // SettingsSerializer.migrate() runs and stamps 1 back.
+    val settingsVersion: Int = 0
 )
 
 /**
