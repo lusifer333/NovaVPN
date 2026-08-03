@@ -4,6 +4,7 @@ import com.novavpn.domain.model.EngineRuntimeState
 import com.novavpn.domain.model.EngineType
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.TunDiagnostics
+import com.novavpn.domain.probe.KaringTestUrls
 import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.ConfigValidator
 import com.novavpn.engine.api.Engine
@@ -78,6 +79,16 @@ class XrayEngine @Inject constructor(
 
     private val _bytesSent = MutableStateFlow(0L)
     override val bytesSent: StateFlow<Long> = _bytesSent.asStateFlow()
+
+    /**
+     * Tag of the outbound the in-core balancer (observatory/leastping)
+     * currently routes traffic to (e.g. "bal-out-3"), or null when the
+     * engine is not running a balanced config / no traffic has flowed yet.
+     * Parsed from the access log's `taking platform initialized detour [tag]`
+     * lines. The service maps this back to a ServerConfig for the UI.
+     */
+    private val _activeOutboundTag = MutableStateFlow<String?>(null)
+    val activeOutboundTag: StateFlow<String?> = _activeOutboundTag.asStateFlow()
 
     // ------------------------------------------------------------------
     // Internal state
@@ -506,6 +517,136 @@ class XrayEngine @Inject constructor(
         Timber.tag(TAG).i("Restarting Xray engine")
         stop()
         return start(config)
+    }
+
+    /**
+     * Start the engine in BALANCED mode (Karing-style auto-connect): all
+     * [servers] become outbounds of an in-core leastping balancer driven by
+     * the observatory's real HTTP health pings. The engine picks the fastest
+     * ALIVE server continuously and routes every connection through it —
+     * no external polling, no restart on switch. The currently picked
+     * outbound is published on [activeOutboundTag] (parsed from the access
+     * log) so the UI can reflect the real server in use.
+     */
+    suspend fun startBalanced(
+        servers: List<ServerConfig>,
+        probeUrl: String = KaringTestUrls.defaultTestUrl,
+        probeIntervalMs: Long = 10_000L,
+        probeTimeoutMs: Int = 3_500
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        startMutex.withLock {
+            if (servers.isEmpty()) {
+                return@withLock Result.failure(
+                    EngineError(EngineError.ErrorCode.CONFIG_PARSE_FAILURE, "No servers for balanced mode")
+                )
+            }
+            _state.value = EngineRuntimeState.Preparing
+            try {
+                val binaryPath = binaryManager.ensureEngine(EngineType.Xray).getOrThrow()
+                val engineDir = binaryManager.getEngineDirectory(EngineType.Xray)
+
+                Timber.tag(TAG).i("BALANCED_START: %d servers in leastping balancer", servers.size)
+                val json = XrayConfigParser.buildBalancerConfig(
+                    servers = servers,
+                    logDir = engineDir.absolutePath,
+                    probeUrl = probeUrl,
+                    probeIntervalMs = probeIntervalMs,
+                    probeTimeoutMs = probeTimeoutMs,
+                    fragmentTls = tlsFragmentEnabled,
+                    keepAlive = keepAliveEnabled
+                )
+                val tempFile = File(engineDir, "config.json")
+                tempFile.writeText(json)
+                configFile = tempFile
+
+                _state.value = EngineRuntimeState.Starting
+                val pb = ProcessBuilder(binaryPath, "run", "-c", tempFile.absolutePath)
+                pb.redirectErrorStream(true)
+                pb.environment()?.put("XRAY_LOCATION_ASSET", ".")
+                val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                        as? android.net.ConnectivityManager
+                val activeNet = cm?.activeNetwork
+                if (activeNet != null) cm.bindProcessToNetwork(activeNet)
+                val xrayProcess = try {
+                    pb.start()
+                } finally {
+                    if (activeNet != null) cm?.bindProcessToNetwork(null)
+                }
+                process = xrayProcess
+
+                val initResult = awaitXrayReady(xrayProcess)
+                startOutputCollector(xrayProcess)
+                if (initResult !== ReadyResult.READY) {
+                    hardKillProcess(xrayProcess)
+                    process = null
+                    _state.value = EngineRuntimeState.Crashed
+                    return@withLock Result.failure(
+                        EngineError(EngineError.ErrorCode.ENGINE_CRASH, "Xray balancer init failed")
+                    )
+                }
+                _state.value = EngineRuntimeState.Running
+                // Watch the error log for the balancer's current outbound
+                // ("taking platform initialized detour [bal-out-N]").
+                startActiveTagWatcher(File(engineDir, "error.log"))
+                Timber.tag(TAG).i("BALANCED_READY: leastping balancer running")
+                Result.success(Unit)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = EngineRuntimeState.Crashed
+                Timber.tag(TAG).e(e, "Failed to start balanced engine")
+                cleanup()
+                Result.failure(
+                    EngineError(EngineError.ErrorCode.ENGINE_CRASH, "Balanced start failed: ${e.message}")
+                )
+            }
+        }
+    }
+
+    /** Job that tails the access log and publishes the balancer's pick. */
+    private var activeTagWatcher: Job? = null
+
+    /**
+     * Tails error.log for `taking platform initialized detour [bal-out-N]`
+     * lines and publishes the outbound tag on [activeOutboundTag]. Xray
+     * logs this per-connection at the dispatcher when a balanced config
+     * picks the platform's chosen outbound for a connection.
+     */
+    private fun startActiveTagWatcher(errorLog: File) {
+        activeTagWatcher?.cancel()
+        activeTagWatcher = serviceScope.launch {
+            var lastSize = 0L
+            while (isActive) {
+                delay(1_500L)
+                if (process?.isAlive != true) break
+                try {
+                    if (!errorLog.exists()) continue
+                    val size = errorLog.length()
+                    if (size < lastSize) { lastSize = 0L } // rotated
+                    if (size == lastSize) continue
+                    val newBytes = size - lastSize
+                    val readFrom = (size - newBytes).coerceAtLeast(0)
+                    val reader = errorLog.bufferedReader()
+                    reader.skip(readFrom)
+                    val lines = reader.readText().lines()
+                    lastSize = size
+                    for (line in lines) {
+                        val m = Regex("""detour \[(bal-out-\d+)\]""").find(line)
+                        if (m != null) {
+                            val tag = m.groupValues[1]
+                            if (_activeOutboundTag.value != tag) {
+                                _activeOutboundTag.value = tag
+                                Timber.tag(TAG).i("BALANCED_PICK: active outbound → %s", tag)
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // transient read error — next tick retries
+                }
+            }
+        }
     }
 
     override suspend fun isAlive(): Boolean = withContext(Dispatchers.IO) {

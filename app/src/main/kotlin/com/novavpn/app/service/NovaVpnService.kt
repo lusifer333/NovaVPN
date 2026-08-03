@@ -18,6 +18,7 @@ import com.novavpn.domain.model.TunDiagnostics
 import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.usecase.connection.ConnectUseCase
 import com.novavpn.engine.api.EngineContext
+import com.novavpn.engine.api.EngineError
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.xray.XrayEngine
 import dagger.hilt.android.AndroidEntryPoint
@@ -68,6 +69,11 @@ class NovaVpnService : VpnService() {
     private var currentConfig: ServerConfig? = null
     private var tunInterface: ParcelFileDescriptor? = null
     private var tunName: String = ""
+
+    /** When the session runs in BALANCED (auto-connect) mode, the full list
+     *  of enabled-subscription servers given to the in-core balancer. The
+     *  balancer's picked outbound (bal-out-N) maps to [n] of this list. */
+    @Volatile private var sessionBalancedServers: List<ServerConfig>? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var connectionJob: Job? = null
@@ -373,7 +379,41 @@ class NovaVpnService : VpnService() {
             appSettings.enableBlockQuic, appSettings.enableTlsFragment,
             appSettings.enableTcpKeepAlive, appSettings.enableFakeDns
         )
-        engine.start(cfg).onFailure { error ->
+
+        // ── BALANCED (auto-connect) mode: in-core leastping urltest ──
+        // When Auto Connect is ON and the chosen server's subscription is
+        // enabled, start the engine with ALL enabled-subscription servers in a
+        // leastping balancer (Xray observatory pings each with a real HTTP
+        // request and routes every connection to the fastest ALIVE one — the
+        // native Xray 26 equivalent of Karing's sing-box urltest). Servers of
+        // DISABLED subscriptions are excluded, so the balancer can never pick
+        // them. The engine publishes the currently-picked outbound on
+        // [XrayEngine.activeOutboundTag]; the session watcher maps it back to a
+        // ServerConfig so Home shows the server actually in use.
+        val balancedList = if (appSettings.enableAutoConnect) {
+            val enabledServers = serverRepository.observeSelectable().first()
+                .filter { it.protocol != com.novavpn.domain.model.Protocol.Unknown }
+            if (enabledServers.size >= 2) enabledServers else null
+        } else null
+
+        val startResult = if (balancedList != null) {
+            Timber.tag(TAG).i(
+                "LIFECYCLE: BALANCED_START %d servers (auto-connect, enabled subs only)",
+                balancedList.size
+            )
+            sessionBalancedServers = balancedList
+            (engine as? XrayEngine)?.startBalanced(
+                servers = balancedList,
+                probeUrl = appSettings.urlTestUrl,
+                probeIntervalMs = URLTEST_INTERVAL_MS,
+                probeTimeoutMs = appSettings.urlTestTimeoutSec * 1000
+            ) ?: Result.failure(EngineError(EngineError.ErrorCode.ENGINE_CRASH, "Engine is not Xray"))
+        } else {
+            sessionBalancedServers = null
+            engine.start(cfg)
+        }
+
+        startResult.onFailure { error ->
             Timber.tag(TAG).e("LIFECYCLE: ENGINE_START_FAILED → %s", error.message)
             connectUseCase.updateState(VpnState.Error(error.message ?: "Start failed"))
             updateNotification("Start failed"); return
@@ -502,8 +542,24 @@ class NovaVpnService : VpnService() {
             // connect) and switch to the fastest healthy one — without dropping
             // the VPN (reuses the proven startVpnInternal switch path). Runs as a
             // child of this session scope so it lives/dies with the connection.
-            if (settingsRepository.get().enableAutoConnect) {
+            //
+            // SKIPPED when running a BALANCED session: in that mode the engine's
+            // in-core observatory/leastping already tests every server and routes
+            // to the fastest ALIVE one continuously — an external loop would
+            // fight the engine with redundant reconnects.
+            if (settingsRepository.get().enableAutoConnect && sessionBalancedServers == null) {
                 launch { runUrltestLoop() }
+            }
+
+            // ── In-core balancer pick watcher (v0.17.4) ──
+            // When the session runs a balanced config (auto-connect ON), the
+            // Xray observatory/leastping balancer picks the fastest ALIVE
+            // server continuously, IN the engine. Reflect that pick in the UI
+            // (connectUseCase.currentServer + last-connected) so Home shows the
+            // server actually carrying traffic — even when the engine switches
+            // servers internally without a reconnect.
+            if (sessionBalancedServers != null) {
+                launch { watchBalancedPick() }
             }
 
             // ── TUN health monitor (runs as long as the connection is alive) ──
@@ -590,6 +646,31 @@ class NovaVpnService : VpnService() {
             } catch (e: Exception) {
                 Timber.tag(TAG).w(e, "[Urtest] cycle failed: %s", e.message)
                 // continue loop on transient failure
+            }
+        }
+    }
+
+    /**
+     * Watch the in-core balancer's current outbound pick and mirror it to the
+     * UI. The Xray engine publishes [XrayEngine.activeOutboundTag] (parsed
+     * from its error log, "taking platform initialized detour [bal-out-N]");
+     * we map tag index → server and update connectUseCase + last-connected.
+     */
+    private suspend fun watchBalancedPick() {
+        val engine = engineManager.activeEngine as? com.novavpn.engine.xray.XrayEngine ?: return
+        Timber.tag(TAG).i("[Balanced] Pick watcher started")
+        engine.activeOutboundTag.collect { tag ->
+            if (tag == null) return@collect
+            val index = tag.removePrefix("bal-out-").toIntOrNull() ?: return@collect
+            val servers = sessionBalancedServers ?: return@collect
+            val picked = servers.getOrNull(index) ?: return@collect
+            if (picked.id != connectUseCase.currentServerId) {
+                Timber.tag(TAG).i("[Balanced] in-core pick → %s (%s)", picked.name, tag)
+                connectUseCase.updateCurrentServer(picked)
+                // Persist as last-connected so other screens highlight it too.
+                try {
+                    serverRepository.setLastConnected(picked.id)
+                } catch (_: Exception) { }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.novavpn.domain.repository
 
 import com.novavpn.domain.model.*
+import com.novavpn.domain.probe.TestResultEntry
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -174,5 +175,25 @@ interface MineRepository {
     suspend fun save(mine: List<ServerConfig>)
 
     /** Drop the persisted mine. */
+    suspend fun clear()
+}
+
+/**
+ * Persisted config-test results (Test Configs screen). Keeps the tested
+ * servers listed with their last ping across app restarts; a server is only
+ * removed when a NEW re-test returns negative.
+ */
+interface TestResultRepository {
+
+    /** Observe the persisted test results (stable order). */
+    fun observe(): Flow<List<TestResultEntry>>
+
+    /** Current persisted test results. */
+    suspend fun get(): List<TestResultEntry>
+
+    /** Persist the whole result set (serverId → entry). */
+    suspend fun save(entries: List<TestResultEntry>)
+
+    /** Drop all persisted results. */
     suspend fun clear()
 }

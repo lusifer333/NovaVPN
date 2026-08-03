@@ -127,23 +127,27 @@ fun TestConfigScreen(
                 }
             }
 
-            // ── Live results (fastest first) ──
+            // ── Live results (fastest first, tap = connect) ──
             val sorted = state.results.values.sortedBy {
                 if (it.ok) it.e2eMs ?: Long.MAX_VALUE else Long.MAX_VALUE
             }
             items(sorted, key = { it.server.id }) { row ->
-                TestResultRowItem(row)
+                TestResultRowItem(row, onClick = { viewModel.selectServer(row.server) })
             }
         }
     }
 }
 
 @Composable
-private fun TestResultRowItem(row: TestResultRow) {
+private fun TestResultRowItem(
+    row: TestResultRow,
+    onClick: () -> Unit
+) {
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),

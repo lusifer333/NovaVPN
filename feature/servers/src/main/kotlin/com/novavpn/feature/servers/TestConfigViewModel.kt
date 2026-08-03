@@ -11,6 +11,10 @@ import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
+import com.novavpn.domain.repository.TestResultRepository
+import com.novavpn.domain.probe.TestResultEntry
+import com.novavpn.domain.usecase.connection.ConnectUseCase
+import com.novavpn.domain.usecase.connection.VpnServiceStarter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +27,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** One row of the config-test results: server + live verdict. */
+/** One row of the config-test results: server + live verdict + selectable. */
 data class TestResultRow(
     val server: ServerConfig,
     val ok: Boolean,
@@ -56,7 +60,10 @@ class TestConfigViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val settingsRepository: SettingsRepository,
     private val fillMineUseCase: FillMineUseCase,
-    private val mineRepository: MineRepository
+    private val mineRepository: MineRepository,
+    private val testResultRepository: TestResultRepository,
+    private val connectUseCase: ConnectUseCase,
+    private val vpnServiceStarter: VpnServiceStarter
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(TestConfigUiState())
@@ -65,11 +72,23 @@ class TestConfigViewModel @Inject constructor(
     private var testJob: Job? = null
 
     init {
-        // Load the persisted URL + timeout once.
+        // Load the persisted URL + timeout, and any previously persisted test
+        // results (request: tested servers stay listed across restarts until a
+        // NEW re-test of the same server fails).
         viewModelScope.launch {
             val s = settingsRepository.get()
+            val persisted = testResultRepository.get()
+            val servers = serverRepository.observeSelectable().first()
+            val restored = persisted.mapNotNull { entry ->
+                val server = servers.firstOrNull { it.id == entry.serverId } ?: return@mapNotNull null
+                TestResultRow(server, entry.ok, entry.e2eMs)
+            }
             _state.update {
-                it.copy(selectedUrl = s.urlTestUrl, timeoutSec = s.urlTestTimeoutSec)
+                it.copy(
+                    selectedUrl = s.urlTestUrl,
+                    timeoutSec = s.urlTestTimeoutSec,
+                    results = restored.associateBy { it.server.id }
+                )
             }
         }
     }
@@ -120,12 +139,17 @@ class TestConfigViewModel @Inject constructor(
                         onResult = { res: ServerProbeResult ->
                             _state.update { st ->
                                 val server = servers.firstOrNull { it.id == res.serverId }
-                                val row = server?.let {
-                                    TestResultRow(it, res.e2eOk, res.e2eMs)
+                                if (server == null) return@update st
+                                val results = if (res.e2eOk) {
+                                    // Healthy → keep/update the row.
+                                    st.results + (res.serverId to TestResultRow(server, true, res.e2eMs))
+                                } else {
+                                    // Re-test FAILED → drop this server from the
+                                    // list entirely (request: a server stays only
+                                    // while re-pings succeed; a negative re-ping
+                                    // removes it — it does NOT linger as ✗).
+                                    st.results - res.serverId
                                 }
-                                val results = if (server != null && row != null) {
-                                    st.results + (res.serverId to row)
-                                } else st.results
                                 st.copy(
                                     results = results,
                                     testedCount = st.testedCount + 1
@@ -133,6 +157,7 @@ class TestConfigViewModel @Inject constructor(
                             }
                         }
                     )
+                    persistResults()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -144,8 +169,39 @@ class TestConfigViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Persist the current result rows to the TestResultRepository so the
+     * tested servers stay listed (with their last ping) across app restarts.
+     * A server is only removed later when a NEW re-test of it fails — the
+     * persistence itself never prunes rows.
+     */
+    private suspend fun persistResults() {
+        val rows = _state.value.results.values
+        val entries = rows.map { r ->
+            TestResultEntry(
+                serverId = r.server.id,
+                ok = r.ok,
+                e2eMs = r.e2eMs,
+                lastTestedAt = System.currentTimeMillis()
+            )
+        }
+        runCatching { testResultRepository.save(entries) }
+    }
+
     fun stopTest() {
         testJob?.cancel()
         testJob = null
+    }
+
+    /** Tap on a tested server → connect to it right away (Karing parity:
+     *  the config-test list is directly actionable). */
+    fun selectServer(server: ServerConfig) {
+        if (_state.value.isTesting) return
+        viewModelScope.launch {
+            val accepted = connectUseCase.connect(server)
+            if (accepted) {
+                vpnServiceStarter.startVpn(server)
+            }
+        }
     }
 }

@@ -8,16 +8,20 @@ import com.novavpn.data.repository.LogRepositoryImpl
 import com.novavpn.data.repository.MineRepositoryImpl
 import com.novavpn.data.repository.ServerRepositoryImpl
 import com.novavpn.data.repository.SettingsRepositoryImpl
+import com.novavpn.data.repository.TestResultRepositoryImpl
 import com.novavpn.storage.datastore.MineSerializer
 import com.novavpn.storage.datastore.SettingsSerializer
+import com.novavpn.storage.datastore.TestResultSerializer
 import com.novavpn.data.repository.StatisticsRepositoryImpl
 import com.novavpn.data.repository.SubscriptionRepositoryImpl
 import com.novavpn.domain.model.AppSettings
 import com.novavpn.domain.model.ServerConfig
+import com.novavpn.domain.probe.TestResultEntry
 import com.novavpn.domain.repository.LogRepository
 import com.novavpn.domain.repository.MineRepository
 import com.novavpn.domain.repository.ServerRepository
 import com.novavpn.domain.repository.SettingsRepository
+import com.novavpn.domain.repository.TestResultRepository
 import com.novavpn.domain.repository.StatisticsRepository
 import com.novavpn.domain.repository.SubscriptionRepository
 import com.novavpn.storage.room.NovaDatabase
@@ -81,6 +85,12 @@ abstract class DataModule {
     abstract fun bindMineRepository(
         impl: MineRepositoryImpl
     ): MineRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindTestResultRepository(
+        impl: TestResultRepositoryImpl
+    ): TestResultRepository
 
     // ── Provides ─────────────────────────────────────────────────────────────
 

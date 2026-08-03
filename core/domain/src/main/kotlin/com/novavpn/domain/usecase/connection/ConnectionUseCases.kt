@@ -58,6 +58,17 @@ class ConnectUseCase @Inject constructor(
     }
 
     /**
+     * Update the current server WITHOUT changing the connection state — used
+     * by the in-core balancer (observatory/leastping) when it auto-switches
+     * the active outbound while the VPN stays up. The UI (Home) reads
+     * [currentServerId] reactively, so this keeps the displayed server in
+     * sync with the server actually carrying traffic.
+     */
+    fun updateCurrentServer(server: ServerConfig?) {
+        currentServer = server
+    }
+
+    /**
      * Check if the currently connected server is still from an enabled subscription.
      * If not, this is logged but the connection is NOT terminated (user stays connected).
      * The UI will show the current server but it won't appear in the selectable list.
