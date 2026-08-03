@@ -27,7 +27,6 @@
     <string name="filter_logs">Filter Logs</string>
     <string name="search_logs">Search Logs</string>
     <string name="engine_xray">Xray Core</string>
-    <string name="engine_singbox">Sing-box</string>
     <string name="custom_dns">Custom DNS</string>
     <string name="per_app_vpn">Per-App VPN</string>
     <string name="split_tunnel">Split Tunnel</string>

@@ -229,7 +229,6 @@ enum class EngineType(
     val libName: String? = null
 ) {
     Xray("Xray Core"),
-    SingBox("Sing-box"),
     HevSocks5Tunnel("hev-socks5-tunnel", libName = "libhev-socks5-tunnel.so"),
     Unknown("Unknown")
 }

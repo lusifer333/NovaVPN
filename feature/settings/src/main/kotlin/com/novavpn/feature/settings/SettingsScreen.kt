@@ -276,7 +276,9 @@ private fun EngineSelector(
         }
 
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            EngineType.entries.filter { it != EngineType.Unknown }.forEach { engine ->
+            // Only engines that are actually registered. HevSocks5Tunnel is the
+            // in-process TUN backend, not a selectable engine — hide it.
+            EngineType.entries.filter { it == EngineType.Xray }.forEach { engine ->
                 DropdownMenuItem(
                     text = { Text(engine.displayName) },
                     onClick = {

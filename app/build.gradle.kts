@@ -111,7 +111,6 @@ dependencies {
     implementation(project(":core:ui"))
     implementation(project(":engine:api"))
     implementation(project(":engine:xray"))
-    implementation(project(":engine:singbox"))
     implementation(project(":network"))
     implementation(project(":statistics"))
     implementation(project(":logging"))

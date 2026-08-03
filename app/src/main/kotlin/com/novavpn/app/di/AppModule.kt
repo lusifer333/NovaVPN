@@ -9,7 +9,6 @@ import com.novavpn.domain.usecase.connection.VpnServiceStarter
 import com.novavpn.engine.api.BinaryManager
 import com.novavpn.engine.api.EngineManager
 import com.novavpn.engine.api.EngineManagerImpl
-import com.novavpn.engine.singbox.SingboxEngine
 import com.novavpn.engine.xray.XrayEngine
 import com.novavpn.engine.xray.XrayRealDelayProber
 import com.novavpn.logging.NovaLogger
@@ -27,17 +26,15 @@ object AppModule {
     @Provides
     @Singleton
     fun provideEngineManager(
-        impl: EngineManagerImpl,
-        xrayEngine: XrayEngine,
-        singboxEngine: SingboxEngine
-    ): EngineManager {
-        impl.register(EngineType.Xray, xrayEngine)
-        impl.register(EngineType.SingBox, singboxEngine)
-        // Select Xray as the default engine synchronously
-        // (selectEngine is suspend — we call internal method directly)
-        impl.selectEngineSync(EngineType.Xray)
-        return impl
-    }
+            impl: EngineManagerImpl,
+            xrayEngine: XrayEngine
+        ): EngineManager {
+            impl.register(EngineType.Xray, xrayEngine)
+            // Select Xray as the default engine synchronously
+            // (selectEngine is suspend — we call internal method directly)
+            impl.selectEngineSync(EngineType.Xray)
+            return impl
+        }
 
     @Provides
     @Singleton
