@@ -38,7 +38,7 @@ data class TestResultRow(
 /** UI state for the config-test screen (Karing-style URL test). */
 data class TestConfigUiState(
     val selectedUrl: String = "https://www.gstatic.com/generate_204",
-    val timeoutSec: Int = 15,
+    val timeoutSec: Int = 5,
     val isTesting: Boolean = false,
     /** Server → probe result, updated live as the wave completes. */
     val results: Map<String, TestResultRow> = emptyMap(),

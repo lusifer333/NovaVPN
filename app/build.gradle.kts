@@ -56,6 +56,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Sign the minified build with the debug key so the release APK
+            // is installable without a private signing keystore (pre-release
+            // artifact for low-end devices; NOT for Play Store).
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

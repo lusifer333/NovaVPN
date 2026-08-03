@@ -255,7 +255,10 @@ data class AppSettings(
     // Karing's first/default test URL (gstatic /generate_204).
     // urlTestTimeoutSec: 1..15s (Karing's url_test_timeout range).
     val urlTestUrl: String = "https://www.gstatic.com/generate_204",
-    val urlTestTimeoutSec: Int = 15,
+    // 5s default (was 15s): on a low-end device a long per-attempt timeout
+    // makes "Test All" hang for ages — 5s is enough for the Karing parity
+    // and keeps the whole wave snappy on weak hardware.
+    val urlTestTimeoutSec: Int = 5,
     val theme: ThemeMode = ThemeMode.System,
     val language: String = "system",
     // 0 = pre-migration (no marker persisted yet). Existing JSON without this

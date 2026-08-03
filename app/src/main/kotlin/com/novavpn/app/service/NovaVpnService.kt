@@ -528,7 +528,9 @@ class NovaVpnService : VpnService() {
         tunHealthJob = serviceScope.launch {
             var counter = 0
             while (isActive) {
-                delay(5_000L)
+                // 15s cadence (was 5s) — this is purely a diagnostic monitor;
+                // on a low-RAM device the extra wakeups buy nothing.
+                delay(15_000L)
                 counter++
                 val tun = tunInterface
                 val fd = tun?.fd ?: -1
@@ -543,25 +545,20 @@ class NovaVpnService : VpnService() {
                     } catch (_: Exception) { false }
                 } else false
 
-                // Check if SOCKS5 port 10808 is listening
-                if (counter % 2 == 1) {
-                    try {
-                        val sock = java.net.Socket()
-                        sock.connect(java.net.InetSocketAddress("127.0.0.1", 10808), 200)
-                        sock.close()
-                    } catch (_: Exception) { }
-                }
-
                 // Bridge diagnostics (official binary — no fd details)
                 val diag = tunnelBridge.diagnostics
                 val bridgeAlive = diag.bridgeAlive
 
-                Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
-                    "tunName=%s, bridge=%s, bPid=%d, bExit=%d, " +
-                    "rxBytes=%d, txBytes=%d, bTxP=%d, bRxP=%d, kernel=%s",
-                    counter, fd, tunFdValid, engineState,
-                    diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
-                    rx, tx, diag.tunWrites, diag.tunReads, readTunKernelStats())
+                // Diagnostic log cadence: every 30s (every 2nd tick) instead of
+                // every 5s — less log I/O and CPU on constrained devices.
+                if (counter % 2 == 1) {
+                    Timber.tag(TAG).i("DIAG[%d]: tunFd=%d, fdAlive=%s, engine=%s, " +
+                        "tunName=%s, bridge=%s, bPid=%d, bExit=%d, " +
+                        "rxBytes=%d, txBytes=%d, bTxP=%d, bRxP=%d, kernel=%s",
+                        counter, fd, tunFdValid, engineState,
+                        diag.tunName, bridgeAlive, diag.bridgePid, diag.bridgeExitCode,
+                        rx, tx, diag.tunWrites, diag.tunReads, readTunKernelStats())
+                }
 
                 // Mirror log tails into logcat (no adb needed): upstream tunnel.log
                 // carries [INSTRUMENT] + library debug lines; Xray access/error logs
