@@ -88,6 +88,13 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            // Store .so files UNCOMPRESSED in the APK (extractNativeLibs=false).
+            // On install, Android mmaps them directly instead of decompressing
+            // + extracting ~70MB to disk — the #1 fix for installs that hang
+            // or fail on low-end devices with limited RAM/storage.
+            useLegacyPackaging = false
+        }
     }
 }
 
