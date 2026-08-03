@@ -159,12 +159,13 @@ class TestConfigViewModel @Inject constructor(
                         previousMine = mineRepository.get(),
                         onResult = { res: ServerProbeResult ->
                             val server = servers.firstOrNull { it.id == res.serverId }
-                            if (server == null) return@onResult
-                            tested++
-                            // Buffer every probe; the batch decides ok→add,
-                            // fail→remove at flush time.
-                            pending[res.serverId] = TestResultRow(server, res.e2eOk, res.e2eMs)
-                            if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
+                            if (server != null) {
+                                tested++
+                                // Buffer every probe; the batch decides ok→add,
+                                // fail→remove at flush time.
+                                pending[res.serverId] = TestResultRow(server, res.e2eOk, res.e2eMs)
+                                if (System.currentTimeMillis() - lastEmitMs >= 100L) flushBatch()
+                            }
                         }
                     )
                     flushBatch()
