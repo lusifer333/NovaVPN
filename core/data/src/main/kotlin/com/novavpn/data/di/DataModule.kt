@@ -154,6 +154,12 @@ abstract class DataModule {
 
         @Provides
         @Singleton
+        fun provideTestResultSerializer(): TestResultSerializer {
+            return TestResultSerializer
+        }
+
+        @Provides
+        @Singleton
         fun provideMineDataStore(
             @ApplicationContext context: Context,
             serializer: MineSerializer
