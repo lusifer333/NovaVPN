@@ -451,36 +451,43 @@ class NovaVpnService : VpnService() {
         // watcher exactly as long as this session; cancelling the connection job
         // cancels the watcher too.
         //
-        // NOTE: we capture the session's own immutable `config` argument (NOT the
-        // service's mutable `currentConfig` field) and guard with an in-flight flag.
-        // `currentConfig` is nulled by atomicTeardown, so reading it from a second
-        // watcher emission that races the reconnect teardown yielded null → the
-        // reconnect job failed with "no server config". The flag also collapses a
-        // burst of rapid toggle changes (e.g. Block QUIC + TLS flipped together)
-        // into a single reconnect.
-        var reconnectInFlight = false
+        // DEBOUNCE + BASELINE (v0.16.29): a raw "reconnect on every emission"
+        // watch made rapid off/on toggling hammer the VPN with several overlapping
+        // teardown→rebuild cycles (and a pointless one if the user flipped back to
+        // the original value). That compounding on an unstable network (wifi→data
+        // or 3G↔4G handoffs) is exactly when the VPN "نرind". So:
+        //  - baseline = settings captured when THIS session started.
+        //  - A reconnect only fires after the settings have been QUIET for ~300ms
+        //    (bursts collapse to one reconnect).
+        //  - The session's own immutable `config` arg is used, never the global
+        //    `currentConfig` (which atomicTeardown nulls).
+        //    If the settings return to the baseline before the quiet window
+        //    elapses, the pending reconnect is cancelled — no pointless rebuild.
+        val baseline = settingsRepository.get()
+        var reconnectJob: Job? = null
         coroutineScope {
             launch {
-                var last = settingsRepository.get()
                 settingsRepository.observe().collect { s ->
-                    val shapingChanged = !reconnectInFlight &&
-                        (s.enableBlockQuic != last.enableBlockQuic ||
-                         s.enableTlsFragment != last.enableTlsFragment ||
-                         s.enableTcpKeepAlive != last.enableTcpKeepAlive ||
-                         s.enableFakeDns != last.enableFakeDns)
-                    if (shapingChanged &&
+                    val differsFromBaseline = s.enableBlockQuic != baseline.enableBlockQuic ||
+                        s.enableTlsFragment != baseline.enableTlsFragment ||
+                        s.enableTcpKeepAlive != baseline.enableTcpKeepAlive ||
+                        s.enableFakeDns != baseline.enableFakeDns
+                    reconnectJob?.cancel()
+                    reconnectJob = null
+                    if (differsFromBaseline &&
                         connectUseCase.connectionState.value == VpnState.Connected) {
-                        reconnectInFlight = true
-                        connectUseCase.updateState(VpnState.Connecting)
-                        Timber.tag(TAG).i(
-                            "[VpnLifecycle] Connection-shaping setting changed → reconnecting to apply (blockQuic=%b tls=%b keepAlive=%b fakeDns=%b)",
-                            s.enableBlockQuic, s.enableTlsFragment, s.enableTcpKeepAlive, s.enableFakeDns
-                        )
-                        // Use the session's OWN `config`, never the global mutable
-                        // `currentConfig` (nulled by teardown) — see NOTE above.
-                        startVpnInternal(config)
+                        reconnectJob = launch {
+                            delay(300)   // debounce: collapse a burst of toggles
+                            if (connectUseCase.connectionState.value == VpnState.Connected) {
+                                Timber.tag(TAG).i(
+                                    "[VpnLifecycle] Connection-shaping setting changed (stable 300ms) → reconnecting to apply (blockQuic=%b tls=%b keepAlive=%b fakeDns=%b)",
+                                    s.enableBlockQuic, s.enableTlsFragment, s.enableTcpKeepAlive, s.enableFakeDns
+                                )
+                                connectUseCase.updateState(VpnState.Connecting)
+                                startVpnInternal(config)
+                            }
+                        }
                     }
-                    last = s
                 }
             }
 
