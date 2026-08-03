@@ -37,4 +37,12 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun setAutoConnect(enabled: Boolean) {
         dataStore.updateData { current -> current.copy(enableAutoConnect = enabled) }
     }
+
+    override suspend fun setUrlTestUrl(url: String) {
+        dataStore.updateData { current -> current.copy(urlTestUrl = url) }
+    }
+
+    override suspend fun setUrlTestTimeout(seconds: Int) {
+        dataStore.updateData { current -> current.copy(urlTestTimeoutSec = seconds.coerceIn(1, 15)) }
+    }
 }

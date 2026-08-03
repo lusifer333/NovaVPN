@@ -31,6 +31,13 @@ object TrafficProbe {
     const val TEST_PORT = 443
     const val TEST_PATH = "/generate_204"
 
+    /**
+     * The full set of Karing urltest URLs lives in the domain layer
+     * ([com.novavpn.domain.probe.KaringTestUrls]); [defaultTestUrl] is the
+     * gstatic /generate_204 (Karing's default `urlTest = kUrlTestList[0]`).
+     */
+    const val defaultTestUrl: String = com.novavpn.domain.probe.KaringTestUrls.defaultTestUrl
+
     private const val SOCKS_VERSION = 0x05
     private const val SOCKS_CMD_CONNECT = 0x01
     private const val SOCKS_ATYP_IPV4 = 0x01
@@ -144,7 +151,11 @@ object TrafficProbe {
                 line = reader.readLine()
             }
             val status = statusLine.split(" ").getOrNull(1)?.toIntOrNull()
-            if (status == 204) ms else null
+            // A 2xx range is success. 204 (gstatic generate_204), 200
+            // (connecttest.txt / checkip / ubuntu / firefox) and cloudflare all
+            // prove the tunnel relays data — requiring EXACTLY 204 would make
+            // the non-204 Karing URLs always fail.
+            if (status != null && status in 200..299) ms else null
         } catch (e: SocketTimeoutException) {
             Timber.tag(tag).w("http rt: timeout")
             null
@@ -154,5 +165,38 @@ object TrafficProbe {
         } finally {
             try { socket?.close() } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * URL convenience overload of [httpRoundTrip] — parses a full URL
+     * ("https://host/path" or "http://...") into host/port/path and runs the
+     * round-trip. Port defaults to 443 for https, 80 for http. Returns the
+     * elapsed ms on a 2xx verdict, null otherwise. Used by the config-test
+     * screen and the urltest loop with a user-configurable Karing URL.
+     */
+    fun httpRoundTripUrl(
+        proxyHost: String,
+        proxyPort: Int,
+        url: String = defaultTestUrl,
+        timeoutMs: Int = 15_000
+    ): Long? {
+        val parsed = try {
+            java.net.URI(url)
+        } catch (_: Exception) {
+            return null
+        }
+        val isHttps = (parsed.scheme ?: "https").lowercase() == "https"
+        val host = parsed.host
+        if (host.isNullOrBlank()) return null
+        val port = if (parsed.port > 0) parsed.port else if (isHttps) 443 else 80
+        val path = if (parsed.path.isNullOrBlank()) "/" else parsed.path
+        return httpRoundTrip(
+            proxyHost = proxyHost,
+            proxyPort = proxyPort,
+            host = host,
+            port = port,
+            path = path,
+            timeoutMs = timeoutMs
+        )
     }
 }

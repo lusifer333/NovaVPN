@@ -67,6 +67,10 @@ class XrayRealDelayProber @Inject constructor(
     private var configFile: File? = null
     private val portByServerId = HashMap<String, Int>()
 
+    /** The probe target URL + timeout carried from [start] for [probe] to reuse. */
+    private var currentUrl: String = TrafficProbe.defaultTestUrl
+    private var currentTimeoutMs: Int = 15_000
+
     override suspend fun start(
         candidates: List<ServerConfig>,
         options: ProbeOptions
@@ -93,6 +97,8 @@ class XrayRealDelayProber @Inject constructor(
             configFile!!.writeText(json)
             portByServerId.clear()
             testable.forEachIndexed { i, s -> portByServerId[s.id] = PROBE_BASE_PORT + i }
+            currentUrl = options.url.ifBlank { TrafficProbe.defaultTestUrl }
+            currentTimeoutMs = options.timeoutMs.coerceIn(1, 15_000)
             Timber.tag(TAG).i(
                 "PROBE_START: mine session, %d candidate outbounds on ports %d..%d",
                 testable.size, PROBE_BASE_PORT, PROBE_BASE_PORT + testable.size - 1
@@ -132,10 +138,11 @@ class XrayRealDelayProber @Inject constructor(
         val port = portByServerId[serverId]
         if (process?.isAlive != true || port == null) return@withContext RealDelayOutcome(false)
         repeat(ATTEMPTS) { attempt ->
-            val ms = TrafficProbe.httpRoundTrip(
+            val ms = TrafficProbe.httpRoundTripUrl(
                 proxyHost = "127.0.0.1",
                 proxyPort = port,
-                timeoutMs = ATTEMPT_TIMEOUT_MS
+                url = currentUrl,
+                timeoutMs = currentTimeoutMs
             )
             if (ms != null) {
                 Timber.tag(TAG).i(

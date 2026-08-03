@@ -61,6 +61,8 @@ class NovaVpnService : VpnService() {
     @Inject lateinit var connectUseCase: ConnectUseCase
     @Inject lateinit var serverRepository: com.novavpn.domain.repository.ServerRepository
     @Inject lateinit var settingsRepository: com.novavpn.domain.repository.SettingsRepository
+    @Inject lateinit var subscriptionRepository: com.novavpn.domain.repository.SubscriptionRepository
+    @Inject lateinit var realDelayProber: com.novavpn.domain.probe.RealDelayProber
     @Inject lateinit var tunnelBridge: NativeTunnelBridge
 
     private var currentConfig: ServerConfig? = null
@@ -97,6 +99,9 @@ class NovaVpnService : VpnService() {
         const val EXTRA_CONFIG_ID = "extra_server_id"
         private const val NOTIFICATION_CHANNEL_ID = "novavpn_vpn"
         private const val TAG = "NovaVpnService"
+        /** Auto-connect urltest polling interval (Karing tests continuously;
+         *  10s is a good battery/accuracy balance for device switching). */
+        private const val URLTEST_INTERVAL_MS = 10_000L
     }
 
     override fun onCreate() {
@@ -491,6 +496,16 @@ class NovaVpnService : VpnService() {
                 }
             }
 
+            // ── Auto-connect urltest loop (Karing-style, v0.17.0) ──
+            // While Connected, periodically rank the current profile group's
+            // servers with a REAL HTTP round-trip (same settings as the real
+            // connect) and switch to the fastest healthy one — without dropping
+            // the VPN (reuses the proven startVpnInternal switch path). Runs as a
+            // child of this session scope so it lives/dies with the connection.
+            if (settingsRepository.get().enableAutoConnect) {
+                launch { runUrltestLoop() }
+            }
+
             // ── TUN health monitor (runs as long as the connection is alive) ──
             startTunHealthMonitor(engine)
 
@@ -504,6 +519,77 @@ class NovaVpnService : VpnService() {
                         updateNotification("Connected")
                     }
                 }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Karing-style auto-connect urltest loop
+    // ------------------------------------------------------------------
+
+    /**
+     * Periodic urltest of the current profile group while the VPN is Connected.
+     *
+     * Karing parity: the core continuously tests every server in the group with
+     * a REAL HTTP round-trip and routes to the best. Xray has no urltest
+     * outbound, so we approximate it here: every [URLTEST_INTERVAL_MS] we probe
+     * the group's servers through the existing [realDelayProber] (same settings
+     * as the real connect), pick the fastest healthy one, and switch to it via
+     * the proven [startVpnInternal] path — the VPN never drops because that path
+     * is the fixed in-place switch. The loop is a child of the session scope, so
+     * disconnect cancels it. Skips silently when the best server == current.
+     */
+    private suspend fun runUrltestLoop() {
+        Timber.tag(TAG).i("[Urltest] Loop started (interval=%ds, autoConnect)",
+            URLTEST_INTERVAL_MS / 1000)
+        while (isActive) {
+            try {
+                // Re-read settings each cycle so disabling Auto Connect stops the loop.
+                val settings = settingsRepository.get()
+                if (!settings.enableAutoConnect) return
+
+                delay(URLTEST_INTERVAL_MS)
+                if (connectUseCase.connectionState.value != VpnState.Connected) return
+
+                val current = currentConfig ?: return
+                if (current.protocol == com.novavpn.domain.model.Protocol.Unknown) continue
+
+                // Same group = same subscription as the current server.
+                val groupServers = serverRepository.observeSelectable().first()
+                    .filter { it.subscriptionId == current.subscriptionId && it.protocol != com.novavpn.domain.model.Protocol.Unknown }
+                if (groupServers.size < 2) continue
+
+                val options = com.novavpn.domain.probe.ProbeOptions(
+                    fragmentTls = settings.enableTlsFragment,
+                    keepAlive = settings.enableTcpKeepAlive,
+                    url = settings.urlTestUrl,
+                    timeoutMs = settings.urlTestTimeoutSec * 1000
+                )
+                val started = realDelayProber.start(groupServers, options)
+                if (!started) continue
+                try {
+                    // Probe all, pick lowest healthy latency.
+                    val best = groupServers
+                        .map { it to realDelayProber.probe(it.id) }
+                        .filter { it.second.ok }
+                        .minByOrNull { it.second.e2eMs ?: Long.MAX_VALUE }
+
+                    if (best != null && best.first.id != current.id && best.first.id.isNotBlank()) {
+                        val target = serverRepository.getById(best.first.id) ?: continue
+                        Timber.tag(TAG).i(
+                            "[Urtest] switching %s→%s (best healthy, %dms)",
+                            current.name, target.name, best.second.e2eMs ?: -1
+                        )
+                        startVpnInternal(target)
+                    }
+                } finally {
+                    realDelayProber.stop()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "[Urtest] cycle failed: %s", e.message)
+                // continue loop on transient failure
             }
         }
     }

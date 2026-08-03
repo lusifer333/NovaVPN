@@ -14,8 +14,16 @@ package com.novavpn.domain.probe
  *   Reality and QUIC are never fragmented.
  * @param keepAlive emit client-side TCP keepalive sockopt on probe
  *   outbounds. Default true to match the engine's default behaviour.
+ * @param url the Karing-style reachability URL the probe HTTP round-trip
+ *   targets (default gstatic /generate_204). The full selectable set lives
+ *   in the engine layer ([TrafficProbe.karingTestUrls]); this only carries
+ *   the chosen one.
+ * @param timeoutMs per-attempt probe timeout (default 15s, Karing's
+ *   url_test_timeout max).
  */
 data class ProbeOptions(
     val fragmentTls: Boolean = false,
-    val keepAlive: Boolean = true
+    val keepAlive: Boolean = true,
+    val url: String = KaringTestUrls.defaultTestUrl,
+    val timeoutMs: Int = 15_000
 )

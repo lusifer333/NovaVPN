@@ -45,16 +45,29 @@ object SettingsSerializer : Serializer<AppSettings> {
      * toggles whose default changed and record version 1.
      */
     private fun migrate(current: AppSettings): AppSettings {
-        if (current.settingsVersion >= 1) return current
-        return current.copy(
-            enableBlockQuic = true,     // was false → BLOCK QUIC now on by default
-            enableTlsFragment = false,
-            enableTcpKeepAlive = false, // was true → off
-            enableIPv6 = false,         // was true → off
-            enableAutoConnect = false,  // was true → off
-            enableAutoStart = false,    // was true → off
-            settingsVersion = 1
-        )
+        var s = current
+        if (s.settingsVersion < 1) {
+            s = s.copy(
+                enableBlockQuic = true,     // was false → BLOCK QUIC now on by default
+                enableTlsFragment = false,
+                enableTcpKeepAlive = false, // was true → off
+                enableIPv6 = false,         // was true → off
+                enableAutoConnect = false,  // was true → off
+                enableAutoStart = false,    // was true → off
+                settingsVersion = 1
+            )
+        }
+        // v2 (v0.17.0): Karing-style config-test settings.
+        // Newly added fields decode to their defaults for pre-v2 data, so no
+        // overlay is strictly needed — but stamp 2 so future v3 moves are
+        // unambiguous. urlTestUrl/urlTestTimeoutSec/autoConnectAfterLaunch all
+        // keep their default values (defaults are the desired ones here).
+        if (s.settingsVersion < 2) {
+            s = s.copy(
+                settingsVersion = 2
+            )
+        }
+        return s
     }
 
     override suspend fun writeTo(t: AppSettings, output: OutputStream) {

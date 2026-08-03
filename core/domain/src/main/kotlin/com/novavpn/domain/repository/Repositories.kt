@@ -122,6 +122,12 @@ interface SettingsRepository {
 
     /** Update auto-connect preference. */
     suspend fun setAutoConnect(enabled: Boolean)
+
+    /** Update the Karing-style config-test reachability URL. */
+    suspend fun setUrlTestUrl(url: String)
+
+    /** Update the Karing-style config-test timeout (seconds, 1..15). */
+    suspend fun setUrlTestTimeout(seconds: Int)
 }
 
 /**

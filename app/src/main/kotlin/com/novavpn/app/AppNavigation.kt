@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.novavpn.feature.home.HomeScreen
 import com.novavpn.feature.subscriptions.SubscriptionsScreen
 import com.novavpn.feature.servers.ProfilesScreen
+import com.novavpn.feature.servers.TestConfigScreen
 import com.novavpn.feature.statistics.StatisticsScreen
 import com.novavpn.feature.settings.SettingsScreen
 import com.novavpn.feature.logs.LogsScreen
@@ -88,6 +89,9 @@ fun AppNavigation() {
                     },
                     onNavigateToLogs = {
                         navController.navigate(Screen.Logs.route)
+                    },
+                    onNavigateToTestConfigs = {
+                        navController.navigate(Screen.TestConfig.route)
                     }
                 )
             }
@@ -114,6 +118,12 @@ fun AppNavigation() {
 
             composable(Screen.Logs.route) {
                 LogsScreen(
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(Screen.TestConfig.route) {
+                TestConfigScreen(
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
