@@ -25,5 +25,9 @@ data class ProbeOptions(
     val fragmentTls: Boolean = false,
     val keepAlive: Boolean = true,
     val url: String = KaringTestUrls.defaultTestUrl,
-    val timeoutMs: Int = 15_000
+    /** Per-attempt HTTP timeout. Default FAST (3.5s) — a dead relay must not
+     *  block the mine fill for the Karing urlTestTimeout (default 15s). Only
+     *  the config-test screen / urltest loop pass the user's chosen
+     *  urlTestTimeoutSec here. */
+    val timeoutMs: Int = KaringTestUrls.XRAY_E2E_TIMEOUT_MS
 )

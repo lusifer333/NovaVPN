@@ -13,6 +13,12 @@ object KaringTestUrls {
 
     const val defaultTestUrl: String = "https://www.gstatic.com/generate_204"
 
+    /**
+     * Fast per-attempt HTTP E2E timeout used by the mine fill / per-server
+     * probe (Karing tests dead relays without letting them block the wave).
+     */
+    const val XRAY_E2E_TIMEOUT_MS: Int = 3_500
+
     val all: List<String> = listOf(
         "https://www.gstatic.com/generate_204",
         "http://www.msftconnecttest.com/connecttest.txt",
