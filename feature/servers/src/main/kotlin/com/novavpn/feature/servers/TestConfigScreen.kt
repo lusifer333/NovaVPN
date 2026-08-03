@@ -29,9 +29,15 @@ import com.novavpn.ui.theme.StatusHealthy
 @Composable
 fun TestConfigScreen(
     onNavigateBack: () -> Unit,
+    onServerSelected: () -> Unit,
     viewModel: TestConfigViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+
+    // Navigate back to Home once a tested server has been selected/connected.
+    LaunchedEffect(Unit) {
+        viewModel.onServerSelected = onServerSelected
+    }
 
     Scaffold(
         topBar = {

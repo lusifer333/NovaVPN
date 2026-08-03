@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.novavpn.data.usecase.probe.FillMineUseCase
 import com.novavpn.domain.model.ServerConfig
 import com.novavpn.domain.model.ServerProbeResult
+import com.novavpn.domain.model.VpnState
 import com.novavpn.domain.probe.ProfileServers
 import com.novavpn.domain.probe.ProbeOptions
 import com.novavpn.domain.repository.MineRepository
@@ -194,14 +195,34 @@ class TestConfigViewModel @Inject constructor(
     }
 
     /** Tap on a tested server → connect to it right away (Karing parity:
-     *  the config-test list is directly actionable). */
+     *  the config-test list is directly actionable). The UI navigates back
+     *  to Home after a successful select.
+     *
+     *  Crash-guard (device crash report, MIUI): [VpnServiceStarter.startVpn]
+     *  calls `startForegroundService`, which can throw synchronously
+     *  (e.g. `ForegroundServiceStartNotAllowedException`/`IllegalStateException`
+     *  when FGS start is restricted). A tap must NEVER crash the app — on
+     *  failure we surface VpnState.Error and stay on the screen instead.
+     */
     fun selectServer(server: ServerConfig) {
         if (_state.value.isTesting) return
         viewModelScope.launch {
-            val accepted = connectUseCase.connect(server)
-            if (accepted) {
-                vpnServiceStarter.startVpn(server)
+            try {
+                val accepted = connectUseCase.connect(server)
+                if (accepted) {
+                    vpnServiceStarter.startVpn(server)
+                    onServerSelected?.invoke()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                connectUseCase.updateState(
+                    VpnState.Error("Failed to start VPN: ${e.message}")
+                )
             }
         }
     }
+
+    /** Set once by the screen so a successful select pops back to Home. */
+    var onServerSelected: (() -> Unit)? = null
 }

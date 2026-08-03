@@ -124,7 +124,8 @@ fun AppNavigation() {
 
             composable(Screen.TestConfig.route) {
                 TestConfigScreen(
-                    onNavigateBack = { navController.popBackStack() }
+                    onNavigateBack = { navController.popBackStack() },
+                    onServerSelected = { navController.popBackStack() }
                 )
             }
         }
