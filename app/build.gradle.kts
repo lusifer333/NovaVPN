@@ -29,8 +29,13 @@ android {
         ndk {
             // arm64-v8a always. armeabi-v7a is opt-in for one-off 32-bit builds:
             //   ./gradlew assembleDebug -Parmv7=true
+            // When building FOR armv7 (tag contains 'armv7'), ship ONLY the
+            // 32-bit ABI — a low-end 32-bit device shouldn't carry a 34MB
+            // arm64 xray it can never run (halves the APK and install size).
+            val armv7Only = project.findProperty("armv7")?.toString()?.toBoolean() == true
             val abis = mutableListOf("arm64-v8a")
-            if (project.findProperty("armv7")?.toString()?.toBoolean() == true) {
+            if (armv7Only) {
+                abis.clear()
                 abis += "armeabi-v7a"
             }
             abiFilters += abis

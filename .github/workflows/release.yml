@@ -52,16 +52,16 @@ jobs:
       - name: Download engine binaries
         run: |
           chmod +x scripts/download-engines.sh
-          scripts/download-engines.sh arm64-v8a
-          # Opt-in 32-bit build: name the tag with "armv7" (e.g. v0.16.9-armv7)
+          # Automatic: build arm64 only, unless tag contains 'armv7' → armv7 only.
           if [[ "${GITHUB_REF_NAME}" == *armv7* ]]; then
             echo "ARMV7=true" >> "$GITHUB_ENV"
             scripts/download-engines.sh armeabi-v7a
           else
             echo "ARMV7=false" >> "$GITHUB_ENV"
+            scripts/download-engines.sh arm64-v8a
           fi
           echo "Engine binaries:"
-          ls -la app/src/main/jniLibs/arm64-v8a/
+          ls -la app/src/main/jniLibs/**/ 2>/dev/null || ls -la app/src/main/jniLibs/
 
       - name: Build Release APK
         run: |
